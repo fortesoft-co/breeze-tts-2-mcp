@@ -127,7 +127,7 @@ async function main(): Promise<void> {
 	const piecesNote =
 		job.pieces.length > 1 ? ` in ${job.pieces.length} sentence pieces` : "";
 	console.log(
-		`Spoke ${job.audioSeconds}s of audio${piecesNote}.\nSaved: ${job.wavPath}\n${job.play ? "Playing audio through the local speakers." : "Playback was skipped."}`,
+		`Spoke ${job.audioSeconds}s of audio${piecesNote}.\nSaved: ${job.wavPath}\n${job.playbackNote ?? "Playback was queued."}`,
 	);
 }
 

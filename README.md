@@ -59,6 +59,12 @@ Generic (any stdio MCP client): command `node .../dist/src/server.js`.
 | `BREEZE_TTS_WORK_DIR` | `./breeze-tts-work` | Where generated WAVs are written |
 | `BREEZE_TTS_PLAYER` | probe: ffplay, mpv, paplay, aplay | Audio player for playback. `/bin/true` disables sound |
 | `BREEZE_TTS_PLAYBACK_LOCK` | tmpdir socket | Path of the machine-wide playback lock
+| `BREEZE_TTS_BOOTSTRAP_VOICE` | none | WAV to seed the default voice at boot when the library lacks it (pair with the transcript row below) |
+| `BREEZE_TTS_BOOTSTRAP_REF_TEXT` | none | Exact transcript of the bootstrap WAV — required with `BREEZE_TTS_BOOTSTRAP_VOICE` |
+
+### First-run default voice
+
+At startup the server waits for the Breeze engine (it refuses connections while the model loads) and checks whether the default voice (`BREEZE_TTS_VOICE`, "default") exists in the library. If not, it registers the bootstrapped WAV — or, without one, designs a generic warm female public-radio voice from a description and saves it under the default name. Best-effort and never blocks the server from coming up; if the engine never appears, speak still says so and `designVoice`/`saveVoice` can create the voice later.
 
 ## Tools
 

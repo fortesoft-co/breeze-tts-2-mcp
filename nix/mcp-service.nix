@@ -92,9 +92,28 @@ in
 			default = true;
 			description = "Whether generated WAVs persist, written into stateDir. With false they are written to /run/breeze-tts-mcp (tmpfs) instead: wiped at reboot, recreated at every activation — for machines where clips are throwaway.";
 		};
+
+		bootstrapVoice = lib.mkOption {
+			type = lib.types.nullOr lib.types.path;
+			default = null;
+			description = "A WAV used to seed the default voice at boot when the engine's library lacks it — registered under the BREEZE_TTS_VOICE name (default by default). null designs a generic warm female public-radio voice instead. Needs bootstrapVoiceRefText.";
+		};
+
+		bootstrapVoiceRefText = lib.mkOption {
+			type = lib.types.nullOr lib.types.str;
+			default = null;
+			description = "Exact transcript of bootstrapVoice's speech; required when bootstrapVoice is set.";
+		};
 	};
 
 	config = lib.mkIf cfg.enable {
+		assertions = [
+			{
+				assertion = cfg.bootstrapVoice == null || cfg.bootstrapVoiceRefText != null;
+				message = "services.breeze-tts-mcp: bootstrapVoice needs bootstrapVoiceRefText (the clip's exact transcript).";
+			}
+		];
+
 		systemd.services.breeze-tts-mcp = {
 			description = "breeze-tts-mcp: Breeze voice toolkit over MCP";
 			wantedBy = [ "multi-user.target" ];
@@ -114,6 +133,10 @@ in
 					else "/run/breeze-tts-mcp";
 				BREEZE_TTS_PLAYER = if cfg.enablePlayback then "" else "/bin/true";
 				XDG_RUNTIME_DIR = lib.mkIf (sessionUid != null) "/run/user/${sessionUid}";
+				BREEZE_TTS_BOOTSTRAP_VOICE =
+					lib.mkIf (cfg.bootstrapVoice != null) (toString cfg.bootstrapVoice);
+				BREEZE_TTS_BOOTSTRAP_REF_TEXT =
+					lib.mkIf (cfg.bootstrapVoiceRefText != null) cfg.bootstrapVoiceRefText;
 			};
 
 			serviceConfig = {

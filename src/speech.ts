@@ -37,7 +37,7 @@ const PLAYER_FALLBACKS = ["ffplay", "mpv", "paplay", "aplay"];
 let playerPromise: Promise<string | null> | undefined;
 // In-process playback FIFO: full lifecycles (lock → spawn → exit → release)
 // chain here, but queuing returns immediately so callers are never blocked.
-let playbackQueue: Promise<unknown> = Promise.resolve();
+let playbackQueue: Promise<void> = Promise.resolve();
 const LOCK_PATH =
 	process.env.BREEZE_TTS_PLAYBACK_LOCK ??
 	path.join(
@@ -125,11 +125,22 @@ async function acquirePlaybackLock(): Promise<net.Server> {
  * Queue a WAV for playback and return immediately. The chained lifecycle takes
  * the machine-wide lock, plays, then releases, so entries play back serially
  * with their trailing silence intact - across entries and across processes.
+ * `lifecycle` resolves when THIS clip has actually finished playing (spawn
+ * exited, lock released), so callers can report the truth instead of a queue
+ * promise.
  */
-export async function playWavFile(wavPath: string): Promise<string> {
+export interface QueuedPlayback {
+	message: string;
+	lifecycle: Promise<void>;
+}
+
+export async function queueWavFile(wavPath: string): Promise<QueuedPlayback> {
 	const player = await findPlayer();
 	if (!player) {
-		return `Playback skipped: no audio player found (tried ${PLAYER_FALLBACKS.join(", ")}). Set BREEZE_TTS_PLAYER to one.`;
+		return {
+			message: `Playback skipped: no audio player found (tried ${PLAYER_FALLBACKS.join(", ")}). Set BREEZE_TTS_PLAYER to one.`,
+			lifecycle: Promise.resolve(),
+		};
 	}
 	playbackQueue = playbackQueue.then(async () => {
 		const lock = await acquirePlaybackLock();
@@ -143,7 +154,9 @@ export async function playWavFile(wavPath: string): Promise<string> {
 					code === 0
 						? resolve()
 						: reject(
-								new Error(`${path.basename(player)} exited with code ${code}`),
+								new Error(
+									`${path.basename(player)} exited with code ${code}`,
+								),
 							),
 				);
 			});
@@ -154,8 +167,19 @@ export async function playWavFile(wavPath: string): Promise<string> {
 			lock.close();
 		}
 	});
+	const lifecycle = playbackQueue;
 	log("queued", wavPath);
-	return `Playing audio through the local speakers via ${path.basename(player)}.`;
+	return {
+		message: `Queued for playback through the local speakers via ${path.basename(player)}.`,
+		lifecycle,
+	};
+}
+
+/** Fire-and-forget queueing for callers that only want the message. */
+export async function playWavFile(wavPath: string): Promise<string> {
+	const { message, lifecycle } = await queueWavFile(wavPath);
+	void lifecycle.catch(() => {});
+	return message;
 }
 
 /** Test/audit hook: resolves when every queued playback has finished. */
@@ -187,6 +211,8 @@ export interface SpeechJob {
 	error?: string;
 	wavPath?: string;
 	audioSeconds?: number;
+	playbackNote?: string;
+	playbackLifecycle?: Promise<void>;
 	resolve?: (job: SpeechJob) => void;
 }
 
@@ -276,12 +302,31 @@ async function runJob(job: SpeechJob): Promise<void> {
 		});
 		job.wavPath = clip.wavPath;
 		job.audioSeconds = clip.audioSeconds;
+		// the call returns when generation ends; playback is chained on the FIFO
+		// and the job stays "playing" until this clip has actually finished —
+		// speechJobs can then report the truth instead of a queue promise
+		let queued: QueuedPlayback;
 		if (job.play) {
-			job.status = "playing";
-			await playWavFile(clip.wavPath);
+			queued = await queueWavFile(clip.wavPath);
+		} else {
+			queued = {
+				message: "Playback was skipped for this call.",
+				lifecycle: Promise.resolve(),
+			};
 		}
-		job.status = "done";
-		job.resolve?.(job);
+		job.playbackNote = queued.message;
+		job.playbackLifecycle = queued.lifecycle;
+		job.status = "playing";
+		void job.playbackLifecycle.then(
+			() => {
+				job.status = "done";
+				job.resolve?.(job);
+			},
+			() => {
+				job.status = "done";
+				job.resolve?.(job);
+			},
+		);
 	} catch (error) {
 		job.status = "error";
 		job.error = String(error);

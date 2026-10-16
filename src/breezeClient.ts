@@ -28,15 +28,29 @@ export async function postWithRetry(
 ): Promise<Response> {
 	let res: Response | undefined;
 	for (let attempt = 1; attempt <= GENERATION_ATTEMPTS; attempt++) {
-		res = await fetch(`${BREEZE_TTS_URL}${path}`, {
-			method: "POST",
-			body,
-			signal: AbortSignal.timeout(timeoutMs),
-		});
+		try {
+			res = await fetch(`${BREEZE_TTS_URL}${path}`, {
+				method: "POST",
+				body,
+				signal: AbortSignal.timeout(timeoutMs),
+			});
+		} catch (error) {
+			// connection refused or timeout: the engine may be restarting (it
+			// refuses connections while the model loads) — same backoff as the
+			// busy case, then a clean verdict for the caller instead of raw
+			// Node fetch noise
+			if (attempt === GENERATION_ATTEMPTS) break;
+			await new Promise((r) => setTimeout(r, 1500 * attempt));
+			continue;
+		}
 		if (res.status !== 409 || attempt === GENERATION_ATTEMPTS) break;
 		await new Promise((r) => setTimeout(r, 1500 * attempt));
 	}
-	if (!res) throw new Error("Breeze server did not return a response");
+	if (!res) {
+		throw new Error(
+			`Breeze server unreachable at ${BREEZE_TTS_URL} (is breeze-server running?)`,
+		);
+	}
 	if (!res.ok) {
 		const text = await res.text();
 		throw new Error(`HTTP ${res.status}: ${text.slice(0, 500)}`);
@@ -82,6 +96,7 @@ export async function generateSpeech(
 	options: Omit<SpeechParams, "text"> & {
 		pauseMs: number;
 		fileStem: string;
+		design?: boolean; // omit voice_id: invent a voice from the instruction alone
 	},
 ): Promise<GeneratedClip> {
 	const { pauseMs, fileStem } = options;
@@ -91,7 +106,10 @@ export async function generateSpeech(
 		const chunk = pieces[index];
 		const form = new URLSearchParams();
 		form.set("text", chunk);
-		form.set("voice_id", options.voiceId ?? BREEZE_TTS_VOICE);
+		// design mode is the server's "no voice_id, no reference" case: voice_id
+		// must be omitted or the generated clip is a direction-clone of whatever
+		// voice the id points at instead of an invented voice
+		if (!options.design) form.set("voice_id", options.voiceId ?? BREEZE_TTS_VOICE);
 		form.set("cfg_scale", String(options.cfgScale));
 		form.set("split_chars", "0"); // chunking is ours; one pass per piece
 		if (options.instruction) form.set("instruction", options.instruction);

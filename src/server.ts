@@ -176,7 +176,7 @@ server.registerTool(
 				content: [
 					{
 						type: "text" as const,
-						text: `Spoke ${job.audioSeconds}s of audio${piecesNote} with voice "${voiceId ?? "default"}"${direction}.\nSaved: ${job.wavPath}\n${job.play ? "Playing audio through the local speakers." : "Playback was skipped for this call."}`,
+						text: `Spoke ${job.audioSeconds}s of audio${piecesNote} with voice "${voiceId ?? "default"}"${direction}.\nSaved: ${job.wavPath}\n${job.playbackNote ?? "Playback was queued."}`,
 					},
 				],
 			};
@@ -199,7 +199,7 @@ server.registerTool(
 	{
 		title: "Check speech jobs",
 		description:
-			"Check the state of recent speech jobs (queued/generating/playing/done/error), including background submissions, with their saved WAV paths.",
+			"Check the state of recent speech jobs (queued/generating/playing/done/error), including background submissions, with their saved WAV paths. The server keeps the last 30 jobs and evicts the oldest finished ones when it is full; this reports the newest 8, newest first, one line per job.",
 		inputSchema: {},
 	},
 	async () => ({
@@ -322,7 +322,7 @@ server.registerTool(
 					"Hello! I am a brand new voice, invented from a description alone. I hope you like how I sound when I speak.",
 			);
 
-			// no voice_id and no reference: the server runs voice design mode,
+			// no voice_id, no reference: the server runs voice design mode,
 			// where the instruction describes the voice to invent
 			const clip = await generateSpeech([content], {
 				instruction: description,
@@ -330,6 +330,7 @@ server.registerTool(
 				seed,
 				pauseMs: 400,
 				fileStem: "design",
+				design: true,
 			});
 
 			const notes: string[] = [];
@@ -387,7 +388,7 @@ server.registerTool(
 	{
 		title: "Save a Breeze voice from a WAV",
 		description:
-			"Register a WAV clip as a reusable voice on the Breeze TTS server so speak can use it as voiceId. The transcript must match the clip's speech exactly. With a name the voice is stored permanently (survives server restarts); without one it is only cached for the current server session.",
+			"Register a WAV clip as a reusable voice on the Breeze TTS server so speak can use it as voiceId. The transcript must match the clip's speech exactly. With a name the voice is stored permanently (survives server restarts); without one it is only cached for the current server session. Unnamed voices are keyed by a hash of the clip bytes and their transcript, so registering the same clip twice dedupes to one entry under a v-<hex> id.",
 		inputSchema: {
 			path: z
 				.string()
@@ -479,7 +480,80 @@ server.registerTool(
 	},
 );
 
+/// --- default voice bootstrap ---
+
+const wait = (ms: number): Promise<void> =>
+	new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * At startup, make sure the voice speak defaults to (BREEZE_TTS_VOICE,
+ * "default") actually exists: wait for the engine (it refuses connections
+ * while the model loads), register a provided bootstrap WAV if one is
+ * configured, otherwise design a generic voice and save it under the
+ * default name. Fire-and-forget: a failure here must never stop the server
+ * from coming up.
+ */
+async function bootstrapDefaultVoice(): Promise<void> {
+	const target = BREEZE_TTS_VOICE;
+	const file = process.env.BREEZE_TTS_BOOTSTRAP_VOICE;
+	const refText = process.env.BREEZE_TTS_BOOTSTRAP_REF_TEXT;
+	for (let attempt = 1; attempt <= 60; attempt++) {
+		let voices: VoiceEntry[];
+		try {
+			voices = await listVoiceEntries();
+		} catch {
+			if (attempt === 1 || attempt % 10 === 0) {
+				log(`bootstrap: breeze server not reachable yet (attempt ${attempt})`);
+			}
+			await wait(2000);
+			continue;
+		}
+		if (voices.some((v) => v.id === target)) {
+			log(`bootstrap: voice "${target}" already present`);
+			return;
+		}
+		try {
+			if (file) {
+				if (!refText) {
+					log(
+						"bootstrap: BREEZE_TTS_BOOTSTRAP_VOICE needs BREEZE_TTS_BOOTSTRAP_REF_TEXT (the clip's exact transcript)",
+					);
+					return;
+				}
+				const voice = await registerVoice({ file }, refText, target);
+				log(`bootstrap: registered voice "${voice.id}" from ${file}`);
+				return;
+			}
+			const content =
+				"Hello. This is the default voice for this server, designed at first start to be easy to listen to. I will read whatever you send my way.";
+			const instruction =
+				"A warm, clear female voice with the measured, friendly cadence of a public radio host. Composed and easy to listen to at length.";
+			const clip = await generateSpeech([content], {
+				instruction,
+				cfgScale: 2,
+				seed: 42,
+				pauseMs: 400,
+				fileStem: "bootstrap",
+				design: true,
+			});
+			const voice = await registerVoice({ wav: pcmToWav(clip.pcm) }, content, target);
+			log(`bootstrap: designed and saved the default voice "${voice.id}"`);
+		} catch (error) {
+			log("bootstrap:", error);
+		}
+		return;
+	}
+	log(
+		"bootstrap: gave up waiting for the breeze server; speak will 404 until a voice named " +
+			target +
+			" is created (designVoice or saveVoice)",
+	);
+}
+
 async function main(): Promise<void> {
+	void bootstrapDefaultVoice().catch((error) => {
+		log("bootstrap failed:", error);
+	});
 	const args = process.argv.slice(2);
 	const httpIndex = args.indexOf("--http");
 	if (httpIndex !== -1 || args.includes("--host")) {
