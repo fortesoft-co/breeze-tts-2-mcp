@@ -57,6 +57,7 @@ server.registerTool(
 			"Long text is split on sentence boundaries into pieces, each generated separately and separated by a beat of silence. " +
 			"Markdown, URLs, emoji and code blocks are stripped automatically before speaking; code blocks are skipped entirely rather than read aloud. " +
 			"Free-form vocal-event paralinguistic tags can be embedded in the text - e.g. (sigh), (laugh), (whispering), (clears throat), [叹气] - place them at the natural spot when the line calls for an audible emotional beat; they fire best with cfgScale 2-3, which is the default. " +
+			"Pause directives are supported: {pause:2.5} inserts exactly 2.5 seconds of silence (seconds, decimal; clamped 0-15) and every directive also ends the current piece — place them between sentences for clean takes. " +
 			"Blocking calls hold the agent only until GENERATION ends; playback queues and continues right after. Clips longer than the blocking audio budget (~45s of speech) are submitted as background jobs instead — speechJobs polls them.",
 		inputSchema: {
 			text: z
@@ -203,7 +204,7 @@ server.registerTool(
 				content: [
 					{
 						type: "text" as const,
-						text: `Spoke ${job.audioSeconds}s of audio${piecesNote} with voice "${voiceId ?? "default"}"${direction}.\nSaved: ${job.wavPath}\n${job.playbackNote ?? "Playback was queued."}`,
+						text: `Spoke ${job.audioSeconds}s of audio${piecesNote} with voice "${voiceId ?? "default"}"${direction}.\nSaved: ${job.wavPath}\n${job.playbackNote ?? "Playback was queued."}${job.directiveNote ? `\n${job.directiveNote}` : ""}`,
 					},
 				],
 			};

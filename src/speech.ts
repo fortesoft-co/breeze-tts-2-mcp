@@ -22,7 +22,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { type SpeechPiece } from "./breezeClient.ts";
 import { generateSpeech } from "./breezeClient.ts";
+import {
+	parseDirectives,
+	summarizeDirectiveReport,
+} from "./directives.ts";
 import { splitIntoChunks } from "./split.ts";
 import { cleanForSpeech } from "./textClean.ts";
 
@@ -196,7 +201,7 @@ export interface SpeechJob {
 	fileStem: string;
 	text: string;
 	cleanedText: string;
-	pieces: string[];
+	pieces: SpeechPiece[];
 	params: {
 		instruction?: string;
 		voiceId?: string;
@@ -213,6 +218,8 @@ export interface SpeechJob {
 	audioSeconds?: number;
 	playbackNote?: string;
 	playbackLifecycle?: Promise<void>;
+	directiveNote?: string;
+	trailingPauseMs?: number;
 	resolve?: (job: SpeechJob) => void;
 }
 
@@ -249,7 +256,25 @@ function submitSpeechJob(request: SpeechRequest): SpeechJob {
 	const raw = request.text ?? "";
 	const cleanedText =
 		request.cleanMarkdown === false ? raw : cleanForSpeech(raw);
-	const pieces = splitIntoChunks(cleanedText, maxChunkChars);
+	// directives parse on the RAW text (before cleaning), then each segment is
+	// cleaned and sentence-split; a segment's pause sits on its FIRST chunk
+	const parsed = parseDirectives(raw);
+	const directiveNote = summarizeDirectiveReport(parsed.report);
+	const pieces: SpeechPiece[] = [];
+	for (const segment of parsed.segments) {
+		const segmentText =
+			request.cleanMarkdown === false ? segment.text : cleanForSpeech(segment.text);
+		let first = true;
+		for (const chunk of splitIntoChunks(segmentText, maxChunkChars)) {
+			pieces.push({
+				text: chunk,
+				...(first && segment.pauseBeforeMs !== undefined
+					? { pauseBeforeMs: segment.pauseBeforeMs }
+					: {}),
+			});
+			first = false;
+		}
+	}
 
 	const job: SpeechJob = {
 		id: newId(),
@@ -257,6 +282,10 @@ function submitSpeechJob(request: SpeechRequest): SpeechJob {
 		text: request.text ?? "",
 		cleanedText,
 		pieces,
+		...(directiveNote ? { directiveNote } : {}),
+		...(parsed.trailingPauseMs !== undefined
+			? { trailingPauseMs: parsed.trailingPauseMs }
+			: {}),
 		params: {
 			instruction: request.instruction,
 			voiceId: request.voiceId,
@@ -298,6 +327,7 @@ async function runJob(job: SpeechJob): Promise<void> {
 			cfgScale: job.params.cfgScale,
 			seed: job.params.seed,
 			pauseMs: job.params.pauseMs,
+			trailingPauseMs: job.trailingPauseMs,
 			fileStem: job.fileStem,
 		});
 		job.wavPath = clip.wavPath;

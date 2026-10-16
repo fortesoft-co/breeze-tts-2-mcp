@@ -91,19 +91,42 @@ export interface GeneratedClip {
  * Generate speech for `pieces` (already sentence-chunked by the caller),
  * joining the streamed PCM with silence gaps and saving a WAV to the work dir.
  */
+export interface SpeechPiece {
+	text: string;
+	/** directive silence BEFORE this piece; replaces the standard beat on its boundary */
+	pauseBeforeMs?: number;
+	design?: boolean;
+	/** phase 2: parsed but not wired yet (directives.ts strips them today) */
+	instruction?: string;
+	voiceId?: string;
+}
+
 export async function generateSpeech(
-	pieces: string[],
+	pieces: (string | SpeechPiece)[],
 	options: Omit<SpeechParams, "text"> & {
 		pauseMs: number;
+		/** directive pause that extends the final beat */
+		trailingPauseMs?: number;
 		fileStem: string;
-		design?: boolean; // omit voice_id: invent a voice from the instruction alone
+		design?: boolean;
 	},
 ): Promise<GeneratedClip> {
 	const { pauseMs, fileStem } = options;
+	const normalized: SpeechPiece[] = pieces.map((piece) =>
+		typeof piece === "string" ? { text: piece } : piece,
+	);
 	const buffers: Buffer[] = [];
+	const silenceFor = (ms: number): Buffer =>
+		Buffer.alloc(Math.round((ms / 1000) * SAMPLE_RATE) * 2);
 
-	for (let index = 0; index < pieces.length; index++) {
-		const chunk = pieces[index];
+	// a leading {pause} opens the render with silence
+	if (normalized[0].pauseBeforeMs) {
+		buffers.push(silenceFor(normalized[0].pauseBeforeMs));
+	}
+
+	for (let index = 0; index < normalized.length; index++) {
+		const piece = normalized[index];
+		const chunk = piece.text;
 		const form = new URLSearchParams();
 		form.set("text", chunk);
 		// design mode is the server's "no voice_id, no reference" case: voice_id
@@ -124,16 +147,22 @@ export async function generateSpeech(
 		if (pcm.length % 2) pcm = pcm.subarray(0, pcm.length - 1);
 		if (pcm.length === 0) {
 			throw new Error(
-				`piece ${index + 1} of ${pieces.length} returned no audio (the stream may have been cut short)`,
+				`piece ${index + 1} of ${normalized.length} returned no audio (the stream may have been cut short)`,
 			);
 		}
 		buffers.push(pcm);
+		const next = normalized[index + 1];
+		// the gap after this piece: the NEXT piece's directive pause when set,
+		// otherwise the standard beat; the last piece gets the beat plus any
+		// trailing directive pause
+		const gapMs = next
+			? (next.pauseBeforeMs ?? pauseMs)
+			: pauseMs + (options.trailingPauseMs ?? 0);
+		buffers.push(silenceFor(gapMs));
 	}
 
-	// Gap after every piece including the last: back-to-back utterances and
-	// speak-tool-call runs get a beat of silence instead of running together.
-	const silence = Buffer.alloc(Math.round((pauseMs / 1000) * SAMPLE_RATE) * 2);
-	const pcm = Buffer.concat(buffers.flatMap((piece) => [piece, silence]));
+	// piece PCM with all gaps already interleaved
+	const pcm = Buffer.concat(buffers);
 
 	const workDir = resolveWorkDir();
 	await fs.mkdir(workDir, { recursive: true });
