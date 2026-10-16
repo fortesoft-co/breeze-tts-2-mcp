@@ -45,12 +45,12 @@ restrained, serious tone.", "Warm and cheerful, like a friendly guide.",
 "A colleague leaning in with good news."
 
 `cfgScale` controls how hard the direction is followed: 1 = neutral reading,
-2-3 = strong direction. Leave it at the default 2.
+2.5+ = strong direction. Leave it at the default 2.5.
 
 ## Paralinguistic tags
 
 Vocal events are free-form, placed inline at their natural spot —
-descriptive phrases, not a fixed vocabulary. They need `cfgScale` 2-3 to
+descriptive phrases, not a fixed vocabulary. They need `cfgScale` 2.5+ to
 reproduce reliably. Instructions remain the better control for whole-line
 delivery; tags are for localized events. Use sparingly: one tag at the one
 beat that deserves it beats three tags in a row.

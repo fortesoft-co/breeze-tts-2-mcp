@@ -590,8 +590,8 @@ server.registerTool(
 						.number()
 						.min(1)
 						.max(3)
-						.default(2)
-						.describe("How hard the direction is followed. Defaults to 2."),
+						.default(2.5)
+						.describe("How hard the direction is followed. Defaults to 2.5."),
 					maxChunkChars: z
 						.number()
 						.int()
@@ -668,7 +668,7 @@ server.registerTool(
 						);
 						const clip = await generateSpeech([sample], {
 							instruction: description,
-							cfgScale: cfgScale ?? 2,
+							cfgScale: cfgScale ?? 2.5,
 							design: true,
 							pauseMs: 400,
 							fileStem: `cast-${name.replace(/[^a-z0-9_-]/gi, "_")}`,
@@ -730,7 +730,7 @@ server.registerTool(
 						params: {
 							instruction,
 							voiceId: resolved.get(narrator) ?? narrator,
-							cfgScale: cfgScale ?? 2,
+							cfgScale: cfgScale ?? 2.5,
 							seed,
 							pauseMs: pauseMs ?? 400,
 						},
