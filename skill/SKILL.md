@@ -82,26 +82,20 @@ Guidance, not a rule.
 
 ## Pauses
 
-Default to none — the engine's phrasing and the beat between pieces read
-naturally most of the time. `{pause:N}` is for silence that carries meaning
-the words don't: a dramatic beat, or a deliberate break at a paragraph or
-sentence boundary.
+Pauses come mainly from direction: eg. "slow, cinematic delivery" 
+at `cfgScale` 4-5 reliably produces slower speech with real breathing 
+room (auditioned: "extremely slow and cinematic — a heavy pause after
+every second word"). For performative pauses and hesitation inside a
+line, write direction and let the model perform it, the same way an
+actor would.
 
-Mid-sentence pauses are a hard cut between two takes, with no prosodic glue
-across them — reach for that only at the rare moment you would actually stop
-dead.
-
-Pauses also come from direction itself: a slow, cinematic delivery at
-`cfgScale` 4-5 reliably produces slower speech with real breathing room
-(auditioned: "extremely slow and cinematic — a heavy pause after every
-second word"). Use direction for performative pauses and hesitation inside
-a line; use `{pause:N}` when the beat must be exact. They compose: direction
-carries the performance, `{pause:N}` stamps the precise beat.
-
-Seconds, 0–15: `{pause:0.8}` is a beat, `{pause:2}` is a paragraph-weight
-silence, `{pause:4}` and up is cinematic time. If the silence feels flat
-rather than dramatic, pad it with a performed breath — see the tested tags
-above.
+`{pause:N}` renders exact silence: seconds, 0-15. `{pause:0.8}` is a beat,
+`{pause:2}` paragraph-weight, `{pause:4}` and up cinematic. Pacing defaults
+to direction (see above); this directive is for silence no delivery can
+perform — a dramatic beat placed exactly, a deliberate paragraph break, or
+a timed gap between segments in the sequence. Avoid it mid-sentence: the
+hard cut severs prosodic glue and reads as a splice, justified only when
+the voice should truly stop dead.
 
 ## Queuing and overlap
 
