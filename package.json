@@ -1,0 +1,34 @@
+{
+	"name": "breeze-tts-mcp",
+	"version": "1.0.0",
+	"description": "MCP server for Breeze-TTS-2.cpp: speak aloud with voice direction, design voices, manage the voice library",
+	"license": "Apache-2.0",
+	"type": "module",
+	"bin": {
+		"breeze-tts-mcp": "./dist/src/server.js",
+		"breeze-speak": "./dist/src/cli.js"
+	},
+	"files": [
+		"dist",
+		"skill"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsx src/server.ts",
+		"test:e2e": "tsx test/e2e.ts",
+		"bundle": "esbuild src/server.ts --bundle --platform=node --format=esm --outfile=dist/src/server.bundle.mjs --log-level=warning && esbuild src/cli.ts --bundle --platform=node --format=esm --outfile=dist/src/cli.bundle.mjs --log-level=warning"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.20.0",
+		"zod": "^4.1.13"
+	},
+	"devDependencies": {
+		"@types/node": "^24.10.1",
+		"tsx": "^4.21.0",
+		"typescript": "^5.9.3",
+		"esbuild": "^0.27.0"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}
