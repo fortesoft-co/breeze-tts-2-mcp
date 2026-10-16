@@ -73,6 +73,11 @@ async function main(): Promise<void> {
 			`playback did not wait for the other process: ${contended}ms < hold ${hold}ms`,
 		);
 	}
+	if (contended < hold + 400) {
+		throw new Error(
+			`no handoff gap after a contended lock: ${contended}ms ≈ hold ${hold}ms — expected ~750ms of dead air`,
+		);
+	}
 	await holder.catch(() => {});
 
 	// 3. stale socket file (crashed holder) → recovers instantly

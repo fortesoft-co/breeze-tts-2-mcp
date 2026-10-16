@@ -98,10 +98,17 @@ function isLockSocketAlive(): Promise<boolean> {
 /**
  * Bind the machine-wide playback lock. The socket only exists while somebody
  * is actually playing, so a crashed holder is detected by a failed connect and
- * cleaned up here.
+ * cleaned up here. Returns the bound server plus how long acquisition WAITED —
+ * a nonzero wait means another process held the lock (their clip just
+ * finished or is finishing), which is the correct place to insert a handoff
+ * gap so back-to-back clips from different clients don't butt together.
  */
-async function acquirePlaybackLock(): Promise<net.Server> {
-	const deadline = Date.now() + 120_000; // bounded by the longest plausible clip
+async function acquirePlaybackLock(): Promise<{
+	server: net.Server;
+	waitedMs: number;
+}> {
+	const started = Date.now();
+	const deadline = started + 120_000; // bounded by the longest plausible clip
 	for (;;) {
 		if (Date.now() > deadline) {
 			throw new Error("timed out waiting for the machine-wide playback lock");
@@ -120,7 +127,9 @@ async function acquirePlaybackLock(): Promise<net.Server> {
 				srv.once("error", () => resolve(null));
 				srv.listen(LOCK_PATH, () => resolve(srv));
 			});
-			if (held) return held;
+			if (held) {
+				return { server: held, waitedMs: Date.now() - started };
+			}
 		}
 		await new Promise((r) => setTimeout(r, 150));
 	}
@@ -139,6 +148,12 @@ export interface QueuedPlayback {
 	lifecycle: Promise<void>;
 }
 
+// Handoff gap: when acquiring the playback lock required waiting (another
+// client's clip was ahead of ours), hold that much dead air before playing so
+// consecutive clips from different clients don't butt together.
+const HANDOFF_CONTENTION_MS = 250;
+const HANDOFF_GAP_MS = 750;
+
 export async function queueWavFile(wavPath: string): Promise<QueuedPlayback> {
 	const player = await findPlayer();
 	if (!player) {
@@ -148,8 +163,13 @@ export async function queueWavFile(wavPath: string): Promise<QueuedPlayback> {
 		};
 	}
 	playbackQueue = playbackQueue.then(async () => {
-		const lock = await acquirePlaybackLock();
+		const { server: lock, waitedMs } = await acquirePlaybackLock();
 		try {
+			if (waitedMs > HANDOFF_CONTENTION_MS) {
+				// another client's clip just ended — the handoff gap is dead air
+				// spent HOLDING the lock, so the next queued entry stays behind it
+				await new Promise((r) => setTimeout(r, HANDOFF_GAP_MS));
+			}
 			await new Promise<void>((resolve, reject) => {
 				const child = spawn(player, playerArgs(player, wavPath), {
 					stdio: "ignore",

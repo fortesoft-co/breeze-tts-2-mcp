@@ -120,3 +120,17 @@ BREEZE_TTS_PLAYER=/bin/true npm run test:e2e
 
 Spawns the server over stdio, drives it as a real MCP client, and cycles the
 full voice lifecycle against the live Breeze server.
+
+## Future work
+
+- **Content-addressed pin store** — extract the comfyui downloads
+  pipeline (the multi-GB model store with plan/seal/audit units) into a
+  reusable NixOS module flake, so breeze and other consumers share one
+  mechanism instead of duplicating transport work per service. Design
+  discussion exists; direction agreed (the MCP layer orchestrates, the store
+  owns content law).
+- **Script retake tooling** — script job folders already keep per-piece wavs
+  plus `manifest.json` (voice + pause gap per piece), so a 70%-perfect
+  performance is retakeable. The missing piece is tooling: regenerate one
+  line in place from its manifest entry and re-join without touching the
+  rest.
