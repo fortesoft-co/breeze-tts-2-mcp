@@ -22,9 +22,10 @@
 					version = "1.0.0";
 					src = self;
 
-					# Bundles are self-contained (sdk + zod inlined), so the store
+					# The npm build = the bare script name (nixpkgs' npmBuildScript);
+					# the bundles are self-contained (sdk + zod inlined), so the store
 					# runtime needs only node and the audio player
-					npmBuild = "npm run bundle";
+					npmBuildScript = "bundle";
 					dontNpmInstall = true;
 					npmDepsHash = "sha256-x1j7ZInSyWtUBojQnLASxXkQiOPnW8JepAPfa7yLMV8=";
 					nativeBuildInputs = [ pkgs.makeWrapper ];
