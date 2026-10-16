@@ -94,12 +94,20 @@ check("clamp: pause 30s becomes 15s with a warning", () => {
 
 // voice/direction values must not leak: quoted dialogue inside a value, and
 // the value is stripped in phase 1 anyway
-check("direction values are stripped in phase 1", () => {
+check("direction directives are retired: stripped with a redirect warning", () => {
 	const pieces = compileDirectivesForTest(
 		'Hello there. {direction: angry and unstable} This line is furious.',
 	);
 	expect(pieces.length === 2, `expected a split, got ${JSON.stringify(pieces)}`);
 	expect(!pieces[1].text.includes("angry"), `leaked: ${pieces[1].text}`);
+	const { report } = parseDirectives(
+		'Hello there. {direction: angry and unstable} This line is furious.',
+	);
+	expect(report.ignoredWiring.length === 0, "direction should not be listed as unwired");
+	expect(
+		report.warnings.some((w) => w.includes("retired") && w.includes("inline")),
+		`expected a redirect warning, got: ${JSON.stringify(report.warnings)}`,
+	);
 });
 
 import { summarizeDirectiveReport } from "../src/directives.ts";

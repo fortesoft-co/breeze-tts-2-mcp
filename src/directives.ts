@@ -3,7 +3,9 @@
 //	v1 keys:
 //	  {pause:N}     — N seconds (decimal), silence before the NEXT piece
 //	  {voice:name}  — sticky voice (phase 2: parsed, reported, stripped)
-//	  {direction:X} — sticky delivery  (phase 2: parsed, reported, stripped)
+//	  {direction:X} — RETIRED: the engine steers delivery from inline free-form
+//	    tags ((whispering), (return to normal), …); the parser strips
+//	    {direction:...} and emits a redirect warning instead
 //
 // Rules (see .scratch/directives-phases.md):
 //  - every directive ENDS the current piece; mid-sentence directives are hard
@@ -138,9 +140,15 @@ export function parseDirectives(raw: string): {
 			// last one on a boundary wins; the pending pause carries across
 			// empty boundaries (adjacent directives) until the next text
 			pendingPauseMs = Math.round(clamped * 1000);
-		} else if (key === "voice" || key === "direction") {
+		} else if (key === "voice") {
 			flushCurrent();
-			report.ignoredWiring.push(key === "voice" ? `voice: ${value}` : `direction: ${value}`);
+			report.ignoredWiring.push(`voice: ${value}`);
+		} else if (key === "direction") {
+			flushCurrent();
+			report.removedBraces += 1;
+			report.warnings.push(
+				"{direction:...} is retired — delivery shifts go inline: (whispering), (angry), (return to normal) style tags",
+			);
 		} else {
 			report.removedBraces += 1;
 			report.warnings.push(`unknown directive "${key}" removed`);

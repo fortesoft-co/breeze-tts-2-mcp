@@ -53,6 +53,10 @@ Free-form, placed inline at their natural spot: `(sigh)`, `(laugh)`,
 usually fire; they need `cfgScale` 2-3 to reproduce reliably. Use sparingly:
 one tag at the one beat that deserves it beats three tags in a row.
 
+Delivery shifts use the same free-form grammar mid-line: `(whispering) …
+(return to normal)` re-steers the voice from the tag onward, inside the same
+generation — no extra pieces, no seam.
+
 ## Queuing and overlap
 
 Multiple utterances play back in submission order with the intended silence
