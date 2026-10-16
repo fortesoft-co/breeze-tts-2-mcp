@@ -254,7 +254,7 @@ export function newId(): string {
 
 function submitSpeechJob(request: SpeechRequest): SpeechJob {
 	const cfgScale = request.cfgScale ?? 2;
-	const maxChunkChars = request.maxChunkChars ?? 200;
+	const maxChunkChars = request.maxChunkChars ?? 300;
 	const pauseMs = request.pauseMs ?? 400;
 
 	const raw = request.text ?? "";

@@ -94,9 +94,9 @@ server.registerTool(
 				.int()
 				.min(40)
 				.max(600)
-				.default(200)
+				.default(300)
 				.describe(
-					"Split long text on sentence boundaries into pieces of at most this many characters, each generated in one pass. Defaults to 200.",
+					"Split long text on sentence boundaries into pieces of at most this many characters, each generated in one pass. Defaults to 300 — fewer seams than smaller budgets without drifting long.",
 				),
 			pauseMs: z
 				.number()
@@ -687,7 +687,7 @@ server.registerTool(
 						const segmentText = cleanForSpeech(segment.text);
 						let first = true;
 						const label = segment.voiceId ?? "narrator";
-						for (const chunk of splitIntoChunks(segmentText, maxChunkChars ?? 200)) {
+						for (const chunk of splitIntoChunks(segmentText, maxChunkChars ?? 300)) {
 							const segmentVoice = segment.voiceId
 								? resolved.get(segment.voiceId)
 								: undefined;
