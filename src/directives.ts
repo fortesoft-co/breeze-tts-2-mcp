@@ -24,6 +24,8 @@ export interface CompiledSegment {
 	text: string;
 	/** directive pause on this boundary, ms; undefined = standard beat */
 	pauseBeforeMs?: number;
+	/** sticky voice carried from a {voice:...} directive (carry mode only) */
+	voiceId?: string;
 }
 
 export interface DirectiveReport {
@@ -31,14 +33,18 @@ export interface DirectiveReport {
 	pauseSecondsTotal: number;
 	/** directives parsed but not wired yet (phase 2), as "key: value" */
 	ignoredWiring: string[];
-	/** stray or unknown brace groups removed */
 	removedBraces: number;
 	strayBraceCount: number;
+	/** voice changes carried onto segments (carry mode) */
+	voiceChanges: number;
 	trailingPauseMs?: number;
 	warnings: string[];
 }
 
-export function summarizeDirectiveReport(report: DirectiveReport): string | undefined {
+export function summarizeDirectiveReport(
+	report: DirectiveReport,
+	opts?: { singleVoice?: boolean },
+): string | undefined {
 	const parts: string[] = [];
 	if (report.pausesApplied > 0) {
 		parts.push(
@@ -51,8 +57,15 @@ export function summarizeDirectiveReport(report: DirectiveReport): string | unde
 			.map((d) => `{${d}}`)
 			.join(", ");
 		parts.push(
-			`voice directives parsed but not wired yet: ${shown}${report.ignoredWiring.length > 4 ? "…" : ""}`,
+			opts?.singleVoice
+				? `voice directives were parsed but speak is single-voice — move {voice:...} scripts to speakScript: ${shown}`
+				: `voice directives parsed but not wired yet: ${shown}${
+						report.ignoredWiring.length > 4 ? "…" : ""
+					}`,
 		);
+	}
+	if (report.voiceChanges > 0) {
+		parts.push(`${report.voiceChanges} voice change(s) carried`);
 	}
 	if (report.removedBraces > 0) {
 		parts.push(
@@ -69,17 +82,22 @@ export function summarizeDirectiveReport(report: DirectiveReport): string | unde
 	return `Directives: ${parts.join("; ")}.`;
 }
 
-export function parseDirectives(raw: string): {
+export function parseDirectives(
+	raw: string,
+	opts?: { voiceMode?: "ignore" | "carry" },
+): {
 	segments: CompiledSegment[];
 	trailingPauseMs?: number;
 	report: DirectiveReport;
 } {
+	const voiceMode = opts?.voiceMode ?? "ignore";
 	const report: DirectiveReport = {
 		pausesApplied: 0,
 		pauseSecondsTotal: 0,
 		ignoredWiring: [],
 		removedBraces: 0,
 		strayBraceCount: 0,
+		voiceChanges: 0,
 		warnings: [],
 	};
 
@@ -87,6 +105,7 @@ export function parseDirectives(raw: string): {
 	const segments: CompiledSegment[] = [];
 	let currentText = "";
 	let pendingPauseMs: number | undefined;
+	let currentVoice: string | undefined;
 	let sawAnyDirective = false;
 
 	const flushCurrent = (): void => {
@@ -96,6 +115,7 @@ export function parseDirectives(raw: string): {
 		segments.push({
 			text,
 			...(pendingPauseMs !== undefined ? { pauseBeforeMs: pendingPauseMs } : {}),
+			...(currentVoice !== undefined ? { voiceId: currentVoice } : {}),
 		});
 		if (pendingPauseMs !== undefined) {
 			report.pausesApplied += 1;
@@ -139,7 +159,13 @@ export function parseDirectives(raw: string): {
 			pendingPauseMs = Math.round(clamped * 1000);
 		} else if (key === "voice") {
 			flushCurrent();
-			report.ignoredWiring.push(`voice: ${value}`);
+			if (voiceMode === "carry") {
+				// sticky: applies from the next piece until the next {voice}
+				currentVoice = value;
+				report.voiceChanges += 1;
+			} else {
+				report.ignoredWiring.push(`voice: ${value}`);
+			}
 		} else {
 			report.removedBraces += 1;
 			report.warnings.push(`unknown directive "${key}" removed`);

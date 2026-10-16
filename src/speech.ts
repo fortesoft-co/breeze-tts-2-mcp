@@ -258,8 +258,10 @@ function submitSpeechJob(request: SpeechRequest): SpeechJob {
 		request.cleanMarkdown === false ? raw : cleanForSpeech(raw);
 	// directives parse on the RAW text (before cleaning), then each segment is
 	// cleaned and sentence-split; a segment's pause sits on its FIRST chunk
-	const parsed = parseDirectives(raw);
-	const directiveNote = summarizeDirectiveReport(parsed.report);
+	// speak is single-voice: {voice:...} directives surface with a redirect
+	// to speakScript instead of being silently dropped
+	const parsed = parseDirectives(raw, { voiceMode: "ignore" });
+	const directiveNote = summarizeDirectiveReport(parsed.report, { singleVoice: true });
 	const pieces: SpeechPiece[] = [];
 	for (const segment of parsed.segments) {
 		const segmentText =
@@ -308,6 +310,69 @@ function submitSpeechJob(request: SpeechRequest): SpeechJob {
 		}
 	}
 	speechJobs.set(job.id, job);
+	return job;
+}
+
+/** Compiled pieces + params, ready for the job pipeline (no re-parsing). */
+export interface PiecesSubmission {
+	pieces: SpeechPiece[];
+	directiveNote?: string;
+	trailingPauseMs?: number;
+	fileStem?: string;
+	params: {
+		instruction?: string;
+		voiceId?: string;
+		cfgScale: number;
+		seed?: number;
+		pauseMs: number;
+	};
+	play?: boolean;
+}
+
+function submitPiecesJob(submission: PiecesSubmission): SpeechJob {
+	const job: SpeechJob = {
+		id: newId(),
+		fileStem: submission.fileStem ?? "script",
+		text: submission.pieces.map((p) => p.text).join(" "),
+		cleanedText: submission.pieces.map((p) => p.text).join(" "),
+		pieces: submission.pieces,
+		...(submission.directiveNote ? { directiveNote: submission.directiveNote } : {}),
+		...(submission.trailingPauseMs !== undefined
+			? { trailingPauseMs: submission.trailingPauseMs }
+			: {}),
+		params: submission.params,
+		play: submission.play ?? true,
+		background: false,
+		createdAt: Date.now(),
+		status: "queued",
+	};
+	if (speechJobs.size >= JOB_HISTORY_LIMIT) {
+		for (const [id, existing] of speechJobs) {
+			if (existing.status === "done" || existing.status === "error") {
+				speechJobs.delete(id);
+			}
+		}
+	}
+	speechJobs.set(job.id, job);
+	return job;
+}
+
+/** Submit compiled script pieces; the promise resolves at queue end (playing). */
+export function speakScriptPieces(
+	submission: PiecesSubmission,
+): Promise<SpeechJob> {
+	const job = submitPiecesJob(submission);
+	const promise = new Promise<SpeechJob>((resolve) => {
+		job.resolve = resolve;
+	});
+	void pumpSpeechQueue().catch((error) => log("pump died:", error));
+	return promise;
+}
+
+/** Fire-and-forget compiled submission (background scripts). */
+export function submitScriptPieces(submission: PiecesSubmission): SpeechJob {
+	const job = submitPiecesJob(submission);
+	void pumpSpeechQueue();
 	return job;
 }
 

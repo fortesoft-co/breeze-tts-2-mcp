@@ -70,7 +70,8 @@ At startup the server waits for the Breeze engine (it refuses connections while 
 
 | Tool | Purpose |
 | --- | --- |
-| `speak` | Speak text aloud with voice direction. Markdown/URLs/emoji/code stripped; sentence-boundary chunking; silence between pieces; vocal-event tags like `(sigh)` supported (need cfgScale 2-3). Blocking calls hold the agent only until generation ends; clips estimated past the blocking audio budget (~45s of speech) auto-switch to background. `background: true` submits without waiting: the clip generates and plays in order after everything queued |
+| `speak` | Speak text aloud with voice direction. Markdown/URLs/emoji/code stripped; sentence-boundary chunking; silence between pieces; vocal-event tags like `(sigh)` supported (need cfgScale 2-3). Blocking calls hold the agent only until generation ends; clips estimated past the blocking audio budget (~45s of speech) auto-switch to background. `background: true` submits without waiting: the clip generates and plays in order after everything queued. Multi-voice scripts: `speakScript` |
+| `speakScript` | Perform a multi-voice script as one artifact: dialogue and narration with a cast of voices. Cast resolves against the library first; missing members are designed on the fly and cached for the session. `{voice:name}` marks voices, `{pause:N}` exact silence, vocal/delivery tags inline. One call, one WAV, fail-fast line attribution |
 | `speechJobs` | State of recent speech jobs (queued/generating/playing/done/error) with their saved WAV paths |
 | `designVoice` | Invent a voice from a description alone, optionally save it permanently |
 | `saveVoice` | Register an existing WAV + its exact transcript as a voice (named = permanent) |
