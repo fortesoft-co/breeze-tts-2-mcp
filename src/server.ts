@@ -84,7 +84,7 @@ server.registerTool(
 			cfgScale: z
 				.number()
 				.min(1)
-				.max(3)
+				.max(5)
 				.default(2.5)
 				.describe(
 					"How hard the instruction is followed — also strengthens inline vocal-event and delivery tags. Defaults to 2.5.",
@@ -326,7 +326,7 @@ server.registerTool(
 			cfgScale: z
 				.number()
 				.min(1)
-				.max(3)
+				.max(5)
 				.default(2.5)
 				.describe(
 					"How hard the description steers the invented voice. Defaults to 2.5.",
@@ -589,7 +589,7 @@ server.registerTool(
 					cfgScale: z
 						.number()
 						.min(1)
-						.max(3)
+						.max(5)
 						.default(2.5)
 						.describe("How hard the direction is followed. Defaults to 2.5."),
 					maxChunkChars: z

@@ -91,6 +91,18 @@ Mid-sentence pauses are a hard cut between two takes, with no prosodic glue
 across them — reach for that only at the rare moment you would actually stop
 dead.
 
+Pauses also come from direction itself: a slow, cinematic delivery at
+`cfgScale` 4-5 reliably produces slower speech with real breathing room
+(auditioned: "extremely slow and cinematic — a heavy pause after every
+second word"). Use direction for performative pauses and hesitation inside
+a line; use `{pause:N}` when the beat must be exact. They compose: direction
+carries the performance, `{pause:N}` stamps the precise beat.
+
+One caution from testing: very high `cfgScale` (4-5) under heavy directions
+can occasionally flip the bilingual model into Mandarin mid-render. It
+recovers on a re-render (seed or wording); if a line comes out in the wrong
+language, lower cfg toward 2.5 or soften the direction.
+
 Seconds, 0–15: `{pause:0.8}` is a beat, `{pause:2}` is a paragraph-weight
 silence, `{pause:4}` and up is cinematic time. If the silence feels flat
 rather than dramatic, pad it with a performed breath — see the tested tags
