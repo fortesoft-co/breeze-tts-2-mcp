@@ -59,7 +59,10 @@ Multiple utterances play back in submission order with the intended silence
 between clips; the speakers are locked machine-wide so two separately
 registered clients take turns instead of talking over each other. Long texts
 are split on sentence boundaries before generation, which keeps delivery
-consistent; `--pause-ms` sizes the gap.
+consistent and never runs the engine as one unbroken pass. Blocking speak
+calls return at generation end (playback queues right after), and clips
+estimated past the blocking audio budget (~45s of speech) auto-switch to
+background jobs — poll speechJobs for those.
 
 ## Voice library
 

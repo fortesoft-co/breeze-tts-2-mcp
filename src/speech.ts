@@ -317,16 +317,20 @@ async function runJob(job: SpeechJob): Promise<void> {
 		job.playbackNote = queued.message;
 		job.playbackLifecycle = queued.lifecycle;
 		job.status = "playing";
+		// truth for speechJobs: the job stays "playing" until the clip has
+		// actually finished — but the resolve fires NOW, at generation/queue
+		// end. A blocking call must not hold the agent for the playback itself
+		// (MCP clients have request timeouts); the audio continues on the FIFO
+		// after the call returns.
 		void job.playbackLifecycle.then(
 			() => {
 				job.status = "done";
-				job.resolve?.(job);
 			},
 			() => {
 				job.status = "done";
-				job.resolve?.(job);
 			},
 		);
+		job.resolve?.(job);
 	} catch (error) {
 		job.status = "error";
 		job.error = String(error);

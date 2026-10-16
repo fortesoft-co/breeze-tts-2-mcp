@@ -41,6 +41,12 @@ const server = new McpServer({
 	version: "1.0.0",
 });
 
+// Blocking speak holds the agent until generation ends, and MCP clients time
+// tool requests out (~30-60s) — so clips longer than this audio budget are
+// auto-submitted as background jobs instead, on any hardware.
+const BLOCKING_AUDIO_BUDGET_S = 45;
+const EST_CHARS_PER_SECOND = 10.5; // conservative: the engine measures ~10-18 chars/s
+
 server.registerTool(
 	"speak",
 	{
@@ -51,7 +57,7 @@ server.registerTool(
 			"Long text is split on sentence boundaries into pieces, each generated separately and separated by a beat of silence. " +
 			"Markdown, URLs, emoji and code blocks are stripped automatically before speaking; code blocks are skipped entirely rather than read aloud. " +
 			"Free-form vocal-event paralinguistic tags can be embedded in the text - e.g. (sigh), (laugh), (whispering), (clears throat), [叹气] - place them at the natural spot when the line calls for an audible emotional beat; they fire best with cfgScale 2-3, which is the default. " +
-			"Set background to submit the line without waiting: it generates and plays in order after everything already queued.",
+			"Blocking calls hold the agent only until GENERATION ends; playback queues and continues right after. Clips longer than the blocking audio budget (~45s of speech) are submitted as background jobs instead — speechJobs polls them.",
 		inputSchema: {
 			text: z
 				.string()
@@ -118,7 +124,7 @@ server.registerTool(
 				.boolean()
 				.default(false)
 				.describe(
-					"Submit only and return immediately: the clip generates in the background and plays back in submission order, including the inter-clip silence. Use speechJobs to check progress.",
+					"Submit only and return immediately: the clip generates in the background and plays back in submission order, including the inter-clip silence. Use speechJobs to check progress. Clips estimated beyond the blocking audio budget (~45s of audio) are auto-submitted this way even without this flag.",
 				),
 		},
 	},
@@ -146,6 +152,27 @@ server.registerTool(
 			play,
 			background,
 		};
+		// auto-background: when the clip is too long to block on safely, degrade
+		// to a background submission rather than racing the client's request
+		// timeout — the same interface either way via speechJobs
+		if (!background) {
+			const cleanedForEstimate =
+				cleanMarkdown === false ? text : cleanForSpeech(text);
+			const estimatedSeconds = Math.round(
+				cleanedForEstimate.length / EST_CHARS_PER_SECOND,
+			);
+			if (estimatedSeconds > BLOCKING_AUDIO_BUDGET_S) {
+				const job = submitSpeech(request);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Clip too long to block on (est. ~${estimatedSeconds}s of audio) — submitted as background job [${job.id}] (${job.pieces.length} pieces, voice "${voiceId ?? "default"}"). It will generate and play back in order; use speechJobs to poll.`,
+						},
+					],
+				};
+			}
+		}
 		if (background) {
 			const job = submitSpeech(request);
 			return {
