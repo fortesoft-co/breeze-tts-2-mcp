@@ -57,6 +57,14 @@ Delivery shifts use the same free-form grammar mid-line: `(whispering) …
 (return to normal)` re-steers the voice from the tag onward, inside the same
 generation — no extra pieces, no seam.
 
+Tested on this engine: reliable — `(sigh)`, `(gasp)`, `(laugh)`, `(cough)`,
+`(clears throat)`; delivery shifts — `(whispering)`, `(angry)`,
+`(return to normal)`. Plausible but NOT performed despite the name —
+`(inhale)`, `(exhale)`. Breath padding: a vocal event at either end of a
+`{pause}` often reads more naturally than bare silence — `(sigh)` lands
+heavy, `(gasp)` lands tense. Guidance, not a rule; audition a new tag once
+before counting on it.
+
 ## Queuing and overlap
 
 Multiple utterances play back in submission order with the intended silence

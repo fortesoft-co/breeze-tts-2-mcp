@@ -10,7 +10,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import fs from "node:fs/promises";
 import http from "node:http";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
 	BREEZE_TTS_VOICE,
@@ -52,20 +54,18 @@ server.registerTool(
 	{
 		title: "Speak aloud",
 		description:
-			"Speak text out loud through the local speakers using the Breeze-TTS-2.cpp server, with voice direction. " +
-			'Says the text in the saved voice "default" by default while following a delivery instruction. ' +
-			"Long text is split on sentence boundaries into pieces, each generated separately and separated by a beat of silence. " +
-			"Markdown, URLs, emoji and code blocks are stripped automatically before speaking; code blocks are skipped entirely rather than read aloud. " +
-			"Free-form vocal-event paralinguistic tags can be embedded in the text - e.g. (sigh), (laugh), (whispering), (clears throat), [叹气] - place them at the natural spot when the line calls for an audible emotional beat; they fire best with cfgScale 2-3, which is the default. " +
-			"Delivery shifts work inline the same way: (whispering), (angry), (return to normal) style tags re-steer the voice from the tag onward within the same generation. " +
-			"Pause directives are supported: {pause:2.5} inserts exactly 2.5 seconds of silence (seconds, decimal; clamped 0-15) and every directive also ends the current piece — place them between sentences for clean takes. " +
-			"Blocking calls hold the agent only until GENERATION ends; playback queues and continues right after. Clips longer than the blocking audio budget (~45s of speech) are submitted as background jobs instead — speechJobs polls them.",
+			"Speaks text aloud on this machine and saves the clip as a WAV (path in the result). " +
+			"Transcripts should be plain speech text — markdown, URLs and emoji are stripped automatically, and code blocks are skipped entirely rather than read aloud. " +
+			"Blocking calls hold the agent until generation ends and the clip is queued; playback then continues independently, and clips estimated past ~45s of speech auto-switch to background jobs (poll speechJobs). " +
+			"Inline grammars inside the text: vocal events (sigh), (gasp) …, delivery shifts (whispering) … (return to normal) — free-form, stronger with higher cfgScale — and {pause:N} for exact seconds of silence at a piece boundary. " +
+			"Unknown voiceId is an error by design — listVoices / designVoice create voices. " +
+			"Deeper guidance (tested tags, breath padding, placement rules): the speakGuide tool.",
 		inputSchema: {
 			text: z
 				.string()
 				.min(1)
 				.describe(
-					"The text to speak. Embed free-form vocal-event tags like (sigh), (laugh), (whispering) or (clears throat) at the spots where the delivery should show emotion.",
+					"The text to speak. Inline tags — vocal events (sigh), (gasp), (clears throat)…; delivery shifts (whispering) … (return to normal); exact silence {pause:1.5}.",
 				),
 			instruction: z
 				.string()
@@ -487,27 +487,61 @@ server.registerTool(
 	async ({ voiceId }) => {
 		try {
 			await deleteVoiceEntry(voiceId);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Voice "${voiceId}" dropped from server memory (files on disk are kept by design).`,
-					},
-				],
-			};
-		} catch (error) {
-			log("deleteVoice failed:", error);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Error deleting voice: ${error}`,
-					},
-				],
-			};
-		}
-	},
-);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Voice "${voiceId}" dropped from server memory (files on disk are kept by design).`,
+						},
+					],
+				};
+			} catch (error) {
+				log("deleteVoice failed:", error);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Error deleting voice: ${error}`,
+						},
+					],
+				};
+			}
+		},
+		);
+
+		server.registerTool(
+			"speakGuide",
+			{
+				title: "Speak guide (skill)",
+				description:
+					"Fetch the speak skill: the tested tag vocabulary (which vocal events actually perform), breath-padding guidance, directive and delivery-grammar placement rules, and when NOT to speak. Returns the skill verbatim; read it once when you need depth beyond the tool descriptions.",
+				inputSchema: {},
+			},
+			async () => {
+				// the skill ships next to the code in every layout: src/ (dev), dist/src/
+				// (tsc), libexec/dist/src/ (bundle, with libexec/skill/ beside it)
+				const candidates = [
+					new URL("../skill/SKILL.md", import.meta.url),
+					new URL("../../skill/SKILL.md", import.meta.url),
+				];
+				for (const candidate of candidates) {
+					try {
+						const md = await fs.readFile(fileURLToPath(candidate), "utf8");
+						return { content: [{ type: "text" as const, text: md }] };
+					} catch {
+						// try the next shipping layout
+					}
+				}
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: "Speak guide unavailable — SKILL.md is not shipped with this installation. The tool descriptions carry the core contracts; the full skill lives at skill/SKILL.md in the breeze-tts-mcp repository.",
+						},
+					],
+				};
+			},
+		);
 
 /// --- default voice bootstrap ---
 
