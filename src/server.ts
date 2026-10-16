@@ -682,9 +682,11 @@ server.registerTool(
 					}
 
 					const pieces: SpeechPiece[] = [];
+					const pieceLabels: string[] = [];
 					for (const segment of parsed.segments) {
 						const segmentText = cleanForSpeech(segment.text);
 						let first = true;
+						const label = segment.voiceId ?? "narrator";
 						for (const chunk of splitIntoChunks(segmentText, maxChunkChars ?? 200)) {
 							const segmentVoice = segment.voiceId
 								? resolved.get(segment.voiceId)
@@ -701,6 +703,7 @@ server.registerTool(
 									: {}),
 								...(segmentVoice !== undefined ? { voiceId: segmentVoice } : {}),
 							});
+							pieceLabels.push(label);
 							first = false;
 						}
 					}
@@ -720,6 +723,10 @@ server.registerTool(
 						directiveNote,
 						trailingPauseMs: parsed.trailingPauseMs,
 						fileStem: "script",
+						savePieces: true,
+						normalizePieces: true,
+						pieceLabels,
+						transcript: script,
 						params: {
 							instruction,
 							voiceId: resolved.get(narrator) ?? narrator,

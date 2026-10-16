@@ -107,6 +107,18 @@ calls return at generation end (playback queues right after), and clips
 estimated past the blocking audio budget (~45s of speech) auto-switch to
 background jobs — poll speechJobs for those.
 
+## Script files and retakes
+
+Generated files land in `<workDir>/<YYYY-MM-DD>/` — speak clips as singles
+plus their transcript; `speakScript` jobs get a subfolder containing the
+joined performance, every piece as its own wav, a `manifest.json` (voice and
+pause gap per piece) and the exact transcript the engine read. Long scripts
+work better split per act or scene — each call is an independent folder you
+can audition and redo. For retakes: the per-piece wavs mean one imperfect
+line is a single regeneration away, and the manifest's gap values make
+re-joining reproducible (pieces are light RMS level-matched at join time —
+gain-only and capped, so intended dynamics like whispers keep their shape).
+
 ## Voice library
 
 - `designVoice` — invents a voice from a description alone; pass `name` to

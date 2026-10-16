@@ -110,21 +110,29 @@ export async function generateSpeech(
 		trailingPauseMs?: number;
 		fileStem: string;
 		design?: boolean;
+		/** write per-piece wavs + transcript + manifest into a job folder */
+		savePieces?: boolean;
+		/** light RMS matching across pieces (gain-only, capped) */
+		normalizePieces?: boolean;
+		/** per-piece voice labels for filenames and the manifest */
+		pieceLabels?: string[];
+		/** the input transcript, saved alongside the output */
+		transcript?: string;
 	},
 ): Promise<GeneratedClip> {
 	const { pauseMs, fileStem } = options;
 	const normalized: SpeechPiece[] = pieces.map((piece) =>
 		typeof piece === "string" ? { text: piece } : piece,
 	);
-	const buffers: Buffer[] = [];
 	const silenceFor = (ms: number): Buffer =>
 		Buffer.alloc(Math.round((ms / 1000) * SAMPLE_RATE) * 2);
 
-	// a leading {pause} opens the render with silence
-	if (normalized[0].pauseBeforeMs) {
-		buffers.push(silenceFor(normalized[0].pauseBeforeMs));
-	}
+	// silence actually inserted before each piece: a leading directive pause,
+	// then the gap computed from each piece's tail
+	const gapBefore: number[] = new Array(normalized.length + 1).fill(pauseMs);
+	if (normalized[0].pauseBeforeMs) gapBefore[0] = normalized[0].pauseBeforeMs;
 
+	const piecePcm: Buffer[] = [];
 	for (let index = 0; index < normalized.length; index++) {
 		const piece = normalized[index];
 		const chunk = piece.text;
@@ -155,34 +163,119 @@ export async function generateSpeech(
 				`piece ${index + 1} of ${normalized.length} returned no audio (the stream may have been cut short)`,
 			);
 		}
-		buffers.push(pcm);
-		const next = normalized[index + 1];
-		// the gap after this piece: the NEXT piece's directive pause when set,
-		// otherwise the standard beat; the last piece gets the beat plus any
-		// trailing directive pause
-		const gapMs = next
-			? (next.pauseBeforeMs ?? pauseMs)
-			: pauseMs + (options.trailingPauseMs ?? 0);
-		buffers.push(silenceFor(gapMs));
+		piecePcm.push(pcm);
+		if (index + 1 < normalized.length) {
+			gapBefore[index + 1] = normalized[index + 1].pauseBeforeMs ?? pauseMs;
+		} else {
+			gapBefore[index + 1] = pauseMs + (options.trailingPauseMs ?? 0);
+		}
+	}
+	// gapBefore[normalized.length] is the trailing beat
+
+	// light level matching: gain-only toward the median piece RMS, capped at
+	// about ±4dB — intended dynamics (whispers, fades) keep most of their
+	// shape, over-loud pieces get pulled back. No compression.
+	if (options.normalizePieces && piecePcm.length > 1) {
+		const rmsValues = piecePcm.map((pcm) => rms16(pcm)).filter((r) => r > 100);
+		if (rmsValues.length > 1) {
+			const sorted = [...rmsValues].sort((a, b) => a - b);
+			const target = sorted[Math.floor(sorted.length / 2)];
+			for (let i = 0; i < piecePcm.length; i++) {
+				const rms = rms16(piecePcm[i]);
+				if (rms <= 100) continue;
+				scale16(piecePcm[i], Math.min(1.6, Math.max(0.63, target / rms)));
+			}
+		}
 	}
 
-	// piece PCM with all gaps already interleaved
-	const pcm = Buffer.concat(buffers);
+	// interleave: silence before each piece + the trailing beat
+	const joinedParts: Buffer[] = [];
+	for (let index = 0; index < piecePcm.length; index++) {
+		joinedParts.push(silenceFor(gapBefore[index]));
+		joinedParts.push(piecePcm[index]);
+	}
+	joinedParts.push(silenceFor(gapBefore[normalized.length]));
+	const pcm = Buffer.concat(joinedParts);
 
+	// layout: <workDir>/<YYYY-MM-DD>/ and script jobs get a subfolder
+	const day = new Date();
+	const dayKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 	const workDir = resolveWorkDir();
-	await fs.mkdir(workDir, { recursive: true });
-	const wavPath = path.join(
-		workDir,
-		`${fileStem}-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`,
-	);
+	const baseDir = path.join(workDir, dayKey);
+	const jobFolder = options.savePieces
+		? path.join(baseDir, `${fileStem}-${stamp}`)
+		: undefined;
+	await fs.mkdir(jobFolder ?? baseDir, { recursive: true });
+	const wavPath = options.savePieces
+		? path.join(jobFolder as string, `${fileStem}.wav`)
+		: path.join(baseDir, `${fileStem}-${stamp}.wav`);
 	await fs.writeFile(wavPath, pcmToWav(pcm));
+
+	// per-piece files + manifest for script jobs: the folder is a
+	// self-describing performance that can be re-joined after a retake
+	const pieceFiles: string[] = [];
+	if (options.savePieces && jobFolder) {
+		const manifestPieces: Array<Record<string, unknown>> = [];
+		for (let index = 0; index < piecePcm.length; index++) {
+			const label = (options.pieceLabels?.[index] ?? "narrator").replace(
+				/[^a-z0-9_-]/gi,
+				"_",
+			);
+			const pieceFile = `piece-${String(index + 1).padStart(2, "0")}-${label.slice(0, 40)}.wav`;
+			const piecePath = path.join(jobFolder, pieceFile);
+			await fs.writeFile(piecePath, pcmToWav(piecePcm[index]));
+			pieceFiles.push(piecePath);
+			manifestPieces.push({
+				file: pieceFile,
+				voice: options.pieceLabels?.[index] ?? "narrator",
+				gapBeforeMs: gapBefore[index],
+			});
+		}
+		const manifest = {
+			kind: "speakScript",
+			createdAt: new Date().toISOString(),
+			joinedFile: `${fileStem}.wav`,
+			pauseMs,
+			trailingPauseMs: options.trailingPauseMs ?? 0,
+			pieces: manifestPieces,
+		};
+		await fs.writeFile(path.join(jobFolder, "manifest.json"), JSON.stringify(manifest, null, 2));
+	}
+
+	if (options.transcript !== undefined) {
+		const transcriptPath = jobFolder
+			? path.join(jobFolder, "transcript.txt")
+			: path.join(baseDir, `${fileStem}-${stamp}.txt`);
+		await fs.writeFile(transcriptPath, options.transcript);
+	}
 
 	return {
 		pcm,
 		wavPath,
 		audioSeconds: Number((pcm.length / 2 / SAMPLE_RATE).toFixed(1)),
-		pieceCount: buffers.length,
+		pieceCount: normalized.length,
+		...(pieceFiles.length > 0 ? { pieceFiles } : {}),
+		...(jobFolder ? { jobFolder } : {}),
 	};
+}
+
+function rms16(pcm: Buffer): number {
+	let sum = 0;
+	const samples = Math.floor(pcm.length / 2);
+	for (let i = 0; i < samples; i++) {
+		const s = pcm.readInt16LE(i * 2);
+		sum += s * s;
+	}
+	return samples === 0 ? 0 : Math.sqrt(sum / samples);
+}
+
+function scale16(pcm: Buffer, gain: number): void {
+	const samples = Math.floor(pcm.length / 2);
+	for (let i = 0; i < samples; i++) {
+		const scaled = Math.round(pcm.readInt16LE(i * 2) * gain);
+		pcm.writeInt16LE(Math.max(-32768, Math.min(32767, scaled)), i * 2);
+	}
 }
 
 function resolveWorkDir(): string {

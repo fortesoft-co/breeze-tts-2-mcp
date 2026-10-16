@@ -56,7 +56,7 @@ Generic (any stdio MCP client): command `node .../dist/src/server.js`.
 | --- | --- | --- |
 | `BREEZE_TTS_URL` | `http://127.0.0.1:1923` | Breeze server base URL |
 | `BREEZE_TTS_VOICE` | `default` | Fallback saved voice for speak |
-| `BREEZE_TTS_WORK_DIR` | `./breeze-tts-work` | Where generated WAVs are written |
+| `BREEZE_TTS_WORK_DIR` | `./breeze-tts-work` | Where generated items are written, under a `YYYY-MM-DD` day folder; `speakScript` jobs get a subfolder with per-piece wavs, `manifest.json` and the transcript |
 | `BREEZE_TTS_PLAYER` | probe: ffplay, mpv, paplay, aplay | Audio player for playback. `/bin/true` disables sound |
 | `BREEZE_TTS_PLAYBACK_LOCK` | tmpdir socket | Path of the machine-wide playback lock
 | `BREEZE_TTS_BOOTSTRAP_VOICE` | none | WAV to seed the default voice at boot when the library lacks it (pair with the transcript row below) |

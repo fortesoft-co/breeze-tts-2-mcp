@@ -220,6 +220,10 @@ export interface SpeechJob {
 	playbackLifecycle?: Promise<void>;
 	directiveNote?: string;
 	trailingPauseMs?: number;
+	pieceLabels?: string[];
+	transcript?: string;
+	savePieces?: boolean;
+	normalizePieces?: boolean;
 	resolve?: (job: SpeechJob) => void;
 }
 
@@ -283,6 +287,7 @@ function submitSpeechJob(request: SpeechRequest): SpeechJob {
 		fileStem: "speak",
 		text: request.text ?? "",
 		cleanedText,
+		transcript: cleanedText,
 		pieces,
 		...(directiveNote ? { directiveNote } : {}),
 		...(parsed.trailingPauseMs !== undefined
@@ -314,7 +319,7 @@ function submitSpeechJob(request: SpeechRequest): SpeechJob {
 }
 
 /** Compiled pieces + params, ready for the job pipeline (no re-parsing). */
-export interface PiecesSubmission {
+	export interface PiecesSubmission {
 	pieces: SpeechPiece[];
 	directiveNote?: string;
 	trailingPauseMs?: number;
@@ -327,6 +332,14 @@ export interface PiecesSubmission {
 		pauseMs: number;
 	};
 	play?: boolean;
+	/** per-piece voice labels for filenames and the manifest */
+	pieceLabels?: string[];
+	/** the input transcript, saved alongside the output */
+	transcript?: string;
+	/** per-piece wav files + manifest in a dated job folder */
+	savePieces?: boolean;
+	/** light gain-only RMS matching across pieces */
+	normalizePieces?: boolean;
 }
 
 function submitPiecesJob(submission: PiecesSubmission): SpeechJob {
@@ -342,6 +355,10 @@ function submitPiecesJob(submission: PiecesSubmission): SpeechJob {
 			: {}),
 		params: submission.params,
 		play: submission.play ?? true,
+		...(submission.pieceLabels ? { pieceLabels: submission.pieceLabels } : {}),
+		...(submission.transcript !== undefined ? { transcript: submission.transcript } : {}),
+		...(submission.savePieces !== undefined ? { savePieces: submission.savePieces } : {}),
+		...(submission.normalizePieces !== undefined ? { normalizePieces: submission.normalizePieces } : {}),
 		background: false,
 		createdAt: Date.now(),
 		status: "queued",
@@ -394,6 +411,10 @@ async function runJob(job: SpeechJob): Promise<void> {
 			pauseMs: job.params.pauseMs,
 			trailingPauseMs: job.trailingPauseMs,
 			fileStem: job.fileStem,
+			savePieces: job.savePieces,
+			normalizePieces: job.normalizePieces,
+			pieceLabels: job.pieceLabels,
+			transcript: job.transcript,
 		});
 		job.wavPath = clip.wavPath;
 		job.audioSeconds = clip.audioSeconds;
