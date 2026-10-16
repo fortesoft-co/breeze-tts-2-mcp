@@ -85,9 +85,9 @@ server.registerTool(
 				.number()
 				.min(1)
 				.max(3)
-				.default(2)
+				.default(2.5)
 				.describe(
-					"How hard the instruction is followed: 1 = neutral reading, 2-3 = strong direction (needed for vocal-event tags, adds some harshness). Defaults to 2.",
+					"How hard the instruction is followed — also strengthens inline vocal-event and delivery tags. Defaults to 2.5.",
 				),
 			maxChunkChars: z
 				.number()
@@ -327,9 +327,9 @@ server.registerTool(
 				.number()
 				.min(1)
 				.max(3)
-				.default(2)
+				.default(2.5)
 				.describe(
-					"How hard the description steers the invented voice. Defaults to 2.",
+					"How hard the description steers the invented voice. Defaults to 2.5.",
 				),
 			seed: z
 				.number()
@@ -363,7 +363,7 @@ server.registerTool(
 			// where the instruction describes the voice to invent
 			const clip = await generateSpeech([content], {
 				instruction: description,
-				cfgScale: cfgScale ?? 2,
+				cfgScale: cfgScale ?? 2.5,
 				seed,
 				pauseMs: 400,
 				fileStem: "design",
