@@ -56,7 +56,7 @@ Generic (any stdio MCP client): command `node .../dist/src/server.js`.
 | --- | --- | --- |
 | `BREEZE_TTS_URL` | `http://127.0.0.1:1923` | Breeze server base URL |
 | `BREEZE_TTS_VOICE` | `default` | Fallback saved voice for speak |
-| `BREEZE_TTS_WORK_DIR` | `./breeze-tts-work` | Where generated WAVs are written |
+| `BREEZE_TTS_WORK_DIR` | `./breeze-tts-work` | Where generated items are written, under a `YYYY-MM-DD` day folder; `speakScript` jobs get a subfolder with per-piece wavs, `manifest.json` and the transcript |
 | `BREEZE_TTS_PLAYER` | probe: ffplay, mpv, paplay, aplay | Audio player for playback. `/bin/true` disables sound |
 | `BREEZE_TTS_PLAYBACK_LOCK` | tmpdir socket | Path of the machine-wide playback lock
 | `BREEZE_TTS_BOOTSTRAP_VOICE` | none | WAV to seed the default voice at boot when the library lacks it (pair with the transcript row below) |
@@ -70,7 +70,8 @@ At startup the server waits for the Breeze engine (it refuses connections while 
 
 | Tool | Purpose |
 | --- | --- |
-| `speak` | Speak text aloud with voice direction. Markdown/URLs/emoji/code stripped; sentence-boundary chunking; silence between pieces; vocal-event tags like `(sigh)` supported (need cfgScale 2-3). Blocking calls hold the agent only until generation ends; clips estimated past the blocking audio budget (~45s of speech) auto-switch to background. `background: true` submits without waiting: the clip generates and plays in order after everything queued |
+| `speak` | Speak text aloud with voice direction. Markdown/URLs/emoji/code stripped; sentence-boundary chunking; silence between pieces; vocal-event tags like `(sigh)` supported (need cfgScale 2-3). Blocking calls hold the agent only until generation ends; clips estimated past the blocking audio budget (~45s of speech) auto-switch to background. `background: true` submits without waiting: the clip generates and plays in order after everything queued. Multi-voice scripts: `speakScript` |
+| `speakScript` | Perform a multi-voice script as one artifact: dialogue and narration with a cast of voices. Cast resolves against the library first; missing members are designed on the fly and cached for the session. `{voice:name}` marks voices, `{pause:N}` exact silence, vocal/delivery tags inline. One call, one WAV, fail-fast line attribution |
 | `speechJobs` | State of recent speech jobs (queued/generating/playing/done/error) with their saved WAV paths |
 | `designVoice` | Invent a voice from a description alone, optionally save it permanently |
 | `saveVoice` | Register an existing WAV + its exact transcript as a voice (named = permanent) |
@@ -119,3 +120,17 @@ BREEZE_TTS_PLAYER=/bin/true npm run test:e2e
 
 Spawns the server over stdio, drives it as a real MCP client, and cycles the
 full voice lifecycle against the live Breeze server.
+
+## Future work
+
+- **Content-addressed pin store** — extract the comfyui downloads
+  pipeline (the multi-GB model store with plan/seal/audit units) into a
+  reusable NixOS module flake, so breeze and other consumers share one
+  mechanism instead of duplicating transport work per service. Design
+  discussion exists; direction agreed (the MCP layer orchestrates, the store
+  owns content law).
+- **Script retake tooling** — script job folders already keep per-piece wavs
+  plus `manifest.json` (voice + pause gap per piece), so a 70%-perfect
+  performance is retakeable. The missing piece is tooling: regenerate one
+  line in place from its manifest entry and re-join without touching the
+  rest.

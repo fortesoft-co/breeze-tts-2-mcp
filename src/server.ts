@@ -10,7 +10,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import fs from "node:fs/promises";
 import http from "node:http";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
 	BREEZE_TTS_VOICE,
@@ -20,15 +22,23 @@ import {
 	pcmToWav,
 	registerVoice,
 	VOICE_NAME_RE,
+	type SpeechPiece,
 	type VoiceEntry,
 } from "./breezeClient.ts";
 import {
 	describeSpeechJobs,
 	playWavFile,
 	speakText,
+	submitScriptPieces,
+	speakScriptPieces,
 	submitSpeech,
 } from "./speech.ts";
+import { splitIntoChunks } from "./split.ts";
 import { cleanForSpeech } from "./textClean.ts";
+import {
+	parseDirectives,
+	summarizeDirectiveReport,
+} from "./directives.ts";
 
 function log(...parts: unknown[]): void {
 	console.error("[breeze-tts-mcp]", ...parts);
@@ -52,18 +62,18 @@ server.registerTool(
 	{
 		title: "Speak aloud",
 		description:
-			"Speak text out loud through the local speakers using the Breeze-TTS-2.cpp server, with voice direction. " +
-			'Says the text in the saved voice "default" by default while following a delivery instruction. ' +
-			"Long text is split on sentence boundaries into pieces, each generated separately and separated by a beat of silence. " +
-			"Markdown, URLs, emoji and code blocks are stripped automatically before speaking; code blocks are skipped entirely rather than read aloud. " +
-			"Free-form vocal-event paralinguistic tags can be embedded in the text - e.g. (sigh), (laugh), (whispering), (clears throat), [叹气] - place them at the natural spot when the line calls for an audible emotional beat; they fire best with cfgScale 2-3, which is the default. " +
-			"Blocking calls hold the agent only until GENERATION ends; playback queues and continues right after. Clips longer than the blocking audio budget (~45s of speech) are submitted as background jobs instead — speechJobs polls them.",
+			"Speaks text aloud on this machine and saves the clip as a WAV (path in the result). " +
+			"Transcripts should be plain speech text — markdown, URLs and emoji are stripped automatically, and code blocks are skipped entirely rather than read aloud. " +
+			"Blocking calls hold the agent until generation ends and the clip is queued; playback then continues independently, and clips estimated past ~45s of speech auto-switch to background jobs (poll speechJobs). " +
+			"Inline grammars inside the text: vocal events (sigh), (gasp) …, delivery shifts (whispering) … (return to normal) — free-form, stronger with higher cfgScale — and {pause:N} for exact seconds of silence at a piece boundary. " +
+			"Unknown voiceId is an error by design — listVoices / designVoice create voices. " +
+			"Deeper guidance (tested tags, breath padding, placement rules): the speakGuide tool. Multi-voice scripts: speakScript.",
 		inputSchema: {
 			text: z
 				.string()
 				.min(1)
 				.describe(
-					"The text to speak. Embed free-form vocal-event tags like (sigh), (laugh), (whispering) or (clears throat) at the spots where the delivery should show emotion.",
+					"The text to speak. Inline tags — vocal events (sigh), (gasp), (clears throat)…; delivery shifts (whispering) … (return to normal); exact silence {pause:1.5}.",
 				),
 			instruction: z
 				.string()
@@ -74,19 +84,19 @@ server.registerTool(
 			cfgScale: z
 				.number()
 				.min(1)
-				.max(3)
-				.default(2)
+				.max(5)
+				.default(2.5)
 				.describe(
-					"How hard the instruction is followed: 1 = neutral reading, 2-3 = strong direction (needed for vocal-event tags, adds some harshness). Defaults to 2.",
+					"How hard the instruction is followed — also strengthens inline vocal-event and delivery tags. Defaults to 2.5.",
 				),
 			maxChunkChars: z
 				.number()
 				.int()
 				.min(40)
 				.max(600)
-				.default(200)
+				.default(300)
 				.describe(
-					"Split long text on sentence boundaries into pieces of at most this many characters, each generated in one pass. Defaults to 200.",
+					"Split long text on sentence boundaries into pieces of at most this many characters, each generated in one pass. Defaults to 300 — fewer seams than smaller budgets without drifting long.",
 				),
 			pauseMs: z
 				.number()
@@ -203,7 +213,7 @@ server.registerTool(
 				content: [
 					{
 						type: "text" as const,
-						text: `Spoke ${job.audioSeconds}s of audio${piecesNote} with voice "${voiceId ?? "default"}"${direction}.\nSaved: ${job.wavPath}\n${job.playbackNote ?? "Playback was queued."}`,
+						text: `Spoke ${job.audioSeconds}s of audio${piecesNote} with voice "${voiceId ?? "default"}"${direction}.\nSaved: ${job.wavPath}\n${job.playbackNote ?? "Playback was queued."}${job.directiveNote ? `\n${job.directiveNote}` : ""}`,
 					},
 				],
 			};
@@ -316,10 +326,10 @@ server.registerTool(
 			cfgScale: z
 				.number()
 				.min(1)
-				.max(3)
-				.default(2)
+				.max(5)
+				.default(2.5)
 				.describe(
-					"How hard the description steers the invented voice. Defaults to 2.",
+					"How hard the description steers the invented voice. Defaults to 2.5.",
 				),
 			seed: z
 				.number()
@@ -353,7 +363,7 @@ server.registerTool(
 			// where the instruction describes the voice to invent
 			const clip = await generateSpeech([content], {
 				instruction: description,
-				cfgScale: cfgScale ?? 2,
+				cfgScale: cfgScale ?? 2.5,
 				seed,
 				pauseMs: 400,
 				fileStem: "design",
@@ -485,27 +495,294 @@ server.registerTool(
 	async ({ voiceId }) => {
 		try {
 			await deleteVoiceEntry(voiceId);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Voice "${voiceId}" dropped from server memory (files on disk are kept by design).`,
-					},
-				],
-			};
-		} catch (error) {
-			log("deleteVoice failed:", error);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Error deleting voice: ${error}`,
-					},
-				],
-			};
-		}
-	},
-);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Voice "${voiceId}" dropped from server memory (files on disk are kept by design).`,
+						},
+					],
+				};
+			} catch (error) {
+				log("deleteVoice failed:", error);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Error deleting voice: ${error}`,
+						},
+					],
+				};
+			}
+		},
+		);
+
+		server.registerTool(
+			"speakGuide",
+			{
+				title: "Speak guide (skill)",
+				description:
+					"Fetch the speak skill: the tested tag vocabulary (which vocal events actually perform), breath-padding guidance, directive and delivery-grammar placement rules, and when NOT to speak. Returns the skill verbatim; read it once when you need depth beyond the tool descriptions.",
+				inputSchema: {},
+			},
+			async () => {
+				// the skill ships next to the code in every layout: src/ (dev), dist/src/
+				// (tsc), libexec/dist/src/ (bundle, with libexec/skill/ beside it)
+				const candidates = [
+					new URL("../skill/SKILL.md", import.meta.url),
+					new URL("../../skill/SKILL.md", import.meta.url),
+				];
+				for (const candidate of candidates) {
+					try {
+						const md = await fs.readFile(fileURLToPath(candidate), "utf8");
+						return { content: [{ type: "text" as const, text: md }] };
+					} catch {
+						// try the next shipping layout
+					}
+				}
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: "Speak guide unavailable — SKILL.md is not shipped with this installation. The tool descriptions carry the core contracts; the full skill lives at skill/SKILL.md in the breeze-tts-mcp repository.",
+						},
+					],
+				};
+			},
+		);
+
+		server.registerTool(
+			"speakScript",
+			{
+				title: "Perform a multi-voice script",
+				description:
+					"Perform a multi-voice script as one artifact: dialogue and narration with a cast of voices, one call, one WAV. " +
+					"Cast members resolve against the voice library first; missing ones are designed on the fly from their cast descriptions and cached for the session (they never touch the voices folder — save them with saveVoice if you want them permanent). " +
+					"Mark voices with {voice:name}, exact pauses with {pause:N}; delivery and vocal-event tags go inline free-form ((whispering), (return to normal), …). " +
+					"Unmarked lines use voiceId, the narrator. Blocking calls hold the agent until generation ends; clips estimated past ~45s auto-switch to background jobs (speechJobs polls). " +
+					"Referencing a voice that is neither in the library nor the cast map (with a description to design it from) is a fail-fast error naming the line.",
+				inputSchema: {
+					script: z
+						.string()
+						.min(1)
+						.describe(
+							"The script: narration and dialogue with inline tags — {voice:name} applies from the next piece on, {pause:N} exact silence, vocal/delivery tags free-form inline. Unmarked text is the narrator.",
+						),
+					cast: z
+						.record(z.string(), z.string())
+						.optional()
+						.describe(
+							"Cast map: voice name → persona description used to design missing voices on the fly (e.g. { jessica: 'brash defense lawyer, female' }). Names already in the library resolve to it and need no description.",
+						),
+					voiceId: z
+						.string()
+						.optional()
+						.describe(
+							`Narrator voice for unmarked lines: a library name or a cast key. Defaults to "${BREEZE_TTS_VOICE}".`,
+						),
+					instruction: z
+						.string()
+						.optional()
+						.describe(
+							"Call-level delivery instruction applied to every piece. Per-line steering is stronger with inline delivery tags.",
+						),
+					cfgScale: z
+						.number()
+						.min(1)
+						.max(5)
+						.default(2.5)
+						.describe("How hard the direction is followed. Defaults to 2.5."),
+					maxChunkChars: z
+						.number()
+						.int()
+						.min(40)
+						.max(600)
+						.default(200)
+						.describe(
+							"Split long lines on sentence boundaries into pieces of at most this many characters. Defaults to 200.",
+						),
+					pauseMs: z
+						.number()
+						.int()
+						.min(0)
+						.max(2000)
+						.default(400)
+						.describe("Milliseconds of silence between pieces. Defaults to 400."),
+					seed: z.number().int().optional().describe("RNG seed for a reproducible performance."),
+					play: z
+						.boolean()
+						.default(true)
+						.describe(
+							"Play the performance through the local speakers. Leave off to only save the file.",
+						),
+					background: z
+						.boolean()
+						.default(false)
+						.describe(
+							"Submit only and return immediately: the script generates and plays back in submission order; use speechJobs to check progress.",
+						),
+				},
+			},
+			async ({
+				script,
+				cast,
+				voiceId,
+				instruction,
+				cfgScale,
+				maxChunkChars,
+				pauseMs,
+				seed,
+				play,
+				background,
+			}) => {
+				try {
+					const parsed = parseDirectives(script, { voiceMode: "carry" });
+					const directiveNote = summarizeDirectiveReport(parsed.report);
+
+					// resolve every referenced voice: narration + cast keys + {voice:...}
+					const narrator = voiceId ?? BREEZE_TTS_VOICE;
+					const referenced = new Set<string>(Object.keys(cast ?? {}));
+					for (const segment of parsed.segments) {
+						if (segment.voiceId) referenced.add(segment.voiceId);
+					}
+					referenced.add(narrator);
+
+					const library = new Map(
+						(await listVoiceEntries()).map((v) => [v.id, v] as const),
+					);
+					const resolved = new Map<string, string>(); // name → engine voice id
+					const castReport: string[] = [];
+					for (const name of referenced) {
+						if (library.has(name)) {
+							resolved.set(name, name);
+							continue;
+						}
+						const description = cast?.[name];
+						if (!description) {
+							throw new Error(
+								`voice "${name}" is not in the voice library and has no cast description to design it from`,
+							);
+						}
+						const sample = cleanForSpeech(
+							`Hello. I am ${name}. This is how I will sound in your script.`,
+						);
+						const clip = await generateSpeech([sample], {
+							instruction: description,
+							cfgScale: cfgScale ?? 2.5,
+							design: true,
+							pauseMs: 400,
+							fileStem: `cast-${name.replace(/[^a-z0-9_-]/gi, "_")}`,
+							seed,
+						});
+						const voice = await registerVoice({ wav: pcmToWav(clip.pcm) }, sample, "");
+						resolved.set(name, voice.id);
+						castReport.push(
+							`designed "${name}" on the fly (session-cached as ${voice.id})`,
+						);
+					}
+
+					const pieces: SpeechPiece[] = [];
+					const pieceLabels: string[] = [];
+					for (const segment of parsed.segments) {
+						const segmentText = cleanForSpeech(segment.text);
+						let first = true;
+						const label = segment.voiceId ?? "narrator";
+						for (const chunk of splitIntoChunks(segmentText, maxChunkChars ?? 300)) {
+							const segmentVoice = segment.voiceId
+								? resolved.get(segment.voiceId)
+								: undefined;
+							if (segment.voiceId && segmentVoice === undefined) {
+								throw new Error(
+									`cast voice "${segment.voiceId}" (line ${pieces.length + 1}) did not resolve`,
+								);
+							}
+							pieces.push({
+								text: chunk,
+								...(first && segment.pauseBeforeMs !== undefined
+									? { pauseBeforeMs: segment.pauseBeforeMs }
+									: {}),
+								...(segmentVoice !== undefined ? { voiceId: segmentVoice } : {}),
+							});
+							pieceLabels.push(label);
+							first = false;
+						}
+					}
+					if (pieces.length === 0) {
+						return {
+							content: [
+								{
+									type: "text" as const,
+									text: "Error: the script had no speakable text (only markdown, code or directives).",
+								},
+							],
+						};
+					}
+
+					const submission = {
+						pieces,
+						directiveNote,
+						trailingPauseMs: parsed.trailingPauseMs,
+						fileStem: "script",
+						savePieces: true,
+						normalizePieces: true,
+						pieceLabels,
+						transcript: script,
+						params: {
+							instruction,
+							voiceId: resolved.get(narrator) ?? narrator,
+							cfgScale: cfgScale ?? 2.5,
+							seed,
+							pauseMs: pauseMs ?? 400,
+						},
+						play,
+					};
+					const totalChars = pieces.reduce((n, p) => n + p.text.length, 0);
+					const estimatedSeconds = Math.round(totalChars / EST_CHARS_PER_SECOND);
+					const castLine =
+						castReport.length > 0 ? castReport.join("; ") : "library voices only";
+					if (background || estimatedSeconds > BLOCKING_AUDIO_BUDGET_S) {
+						const job = submitScriptPieces(submission);
+						return {
+							content: [
+								{
+									type: "text" as const,
+									text: `${background ? "Submitted" : `Clip too long to block on (est. ~${estimatedSeconds}s of audio) — submitted`} as background job [${job.id}] (${job.pieces.length} pieces, est. ~${estimatedSeconds}s of audio).\nCast: ${castLine}\nUse speechJobs to poll.`,
+								},
+							],
+						};
+					}
+					const job = await speakScriptPieces(submission);
+					if (job.status === "error" || !job.wavPath) {
+						return {
+							content: [
+								{
+									type: "text" as const,
+									text: `Error performing the script: ${job.error ?? "unknown failure"}`,
+								},
+							],
+						};
+					}
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Performed ${job.audioSeconds}s across ${job.pieces.length} pieces.\nCast: ${castLine}\nSaved: ${job.wavPath}\n${job.playbackNote ?? "Playback was queued."}${job.directiveNote ? `\n${job.directiveNote}` : ""}`,
+							},
+						],
+					};
+				} catch (error) {
+					log("speakScript failed:", error);
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Error performing the script: ${error}`,
+							},
+						],
+					};
+				}
+			},
+		);
 
 /// --- default voice bootstrap ---
 

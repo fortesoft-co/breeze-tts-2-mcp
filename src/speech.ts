@@ -22,7 +22,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { type SpeechPiece } from "./breezeClient.ts";
 import { generateSpeech } from "./breezeClient.ts";
+import {
+	parseDirectives,
+	summarizeDirectiveReport,
+} from "./directives.ts";
 import { splitIntoChunks } from "./split.ts";
 import { cleanForSpeech } from "./textClean.ts";
 
@@ -93,10 +98,17 @@ function isLockSocketAlive(): Promise<boolean> {
 /**
  * Bind the machine-wide playback lock. The socket only exists while somebody
  * is actually playing, so a crashed holder is detected by a failed connect and
- * cleaned up here.
+ * cleaned up here. Returns the bound server plus how long acquisition WAITED —
+ * a nonzero wait means another process held the lock (their clip just
+ * finished or is finishing), which is the correct place to insert a handoff
+ * gap so back-to-back clips from different clients don't butt together.
  */
-async function acquirePlaybackLock(): Promise<net.Server> {
-	const deadline = Date.now() + 120_000; // bounded by the longest plausible clip
+async function acquirePlaybackLock(): Promise<{
+	server: net.Server;
+	waitedMs: number;
+}> {
+	const started = Date.now();
+	const deadline = started + 120_000; // bounded by the longest plausible clip
 	for (;;) {
 		if (Date.now() > deadline) {
 			throw new Error("timed out waiting for the machine-wide playback lock");
@@ -115,7 +127,9 @@ async function acquirePlaybackLock(): Promise<net.Server> {
 				srv.once("error", () => resolve(null));
 				srv.listen(LOCK_PATH, () => resolve(srv));
 			});
-			if (held) return held;
+			if (held) {
+				return { server: held, waitedMs: Date.now() - started };
+			}
 		}
 		await new Promise((r) => setTimeout(r, 150));
 	}
@@ -134,6 +148,12 @@ export interface QueuedPlayback {
 	lifecycle: Promise<void>;
 }
 
+// Handoff gap: when acquiring the playback lock required waiting (another
+// client's clip was ahead of ours), hold that much dead air before playing so
+// consecutive clips from different clients don't butt together.
+const HANDOFF_CONTENTION_MS = 250;
+const HANDOFF_GAP_MS = 750;
+
 export async function queueWavFile(wavPath: string): Promise<QueuedPlayback> {
 	const player = await findPlayer();
 	if (!player) {
@@ -143,8 +163,13 @@ export async function queueWavFile(wavPath: string): Promise<QueuedPlayback> {
 		};
 	}
 	playbackQueue = playbackQueue.then(async () => {
-		const lock = await acquirePlaybackLock();
+		const { server: lock, waitedMs } = await acquirePlaybackLock();
 		try {
+			if (waitedMs > HANDOFF_CONTENTION_MS) {
+				// another client's clip just ended — the handoff gap is dead air
+				// spent HOLDING the lock, so the next queued entry stays behind it
+				await new Promise((r) => setTimeout(r, HANDOFF_GAP_MS));
+			}
 			await new Promise<void>((resolve, reject) => {
 				const child = spawn(player, playerArgs(player, wavPath), {
 					stdio: "ignore",
@@ -196,7 +221,7 @@ export interface SpeechJob {
 	fileStem: string;
 	text: string;
 	cleanedText: string;
-	pieces: string[];
+	pieces: SpeechPiece[];
 	params: {
 		instruction?: string;
 		voiceId?: string;
@@ -213,6 +238,12 @@ export interface SpeechJob {
 	audioSeconds?: number;
 	playbackNote?: string;
 	playbackLifecycle?: Promise<void>;
+	directiveNote?: string;
+	trailingPauseMs?: number;
+	pieceLabels?: string[];
+	transcript?: string;
+	savePieces?: boolean;
+	normalizePieces?: boolean;
 	resolve?: (job: SpeechJob) => void;
 }
 
@@ -242,21 +273,46 @@ export function newId(): string {
 }
 
 function submitSpeechJob(request: SpeechRequest): SpeechJob {
-	const cfgScale = request.cfgScale ?? 2;
-	const maxChunkChars = request.maxChunkChars ?? 200;
+	const cfgScale = request.cfgScale ?? 2.5;
+	const maxChunkChars = request.maxChunkChars ?? 300;
 	const pauseMs = request.pauseMs ?? 400;
 
 	const raw = request.text ?? "";
 	const cleanedText =
 		request.cleanMarkdown === false ? raw : cleanForSpeech(raw);
-	const pieces = splitIntoChunks(cleanedText, maxChunkChars);
+	// directives parse on the RAW text (before cleaning), then each segment is
+	// cleaned and sentence-split; a segment's pause sits on its FIRST chunk
+	// speak is single-voice: {voice:...} directives surface with a redirect
+	// to speakScript instead of being silently dropped
+	const parsed = parseDirectives(raw, { voiceMode: "ignore" });
+	const directiveNote = summarizeDirectiveReport(parsed.report, { singleVoice: true });
+	const pieces: SpeechPiece[] = [];
+	for (const segment of parsed.segments) {
+		const segmentText =
+			request.cleanMarkdown === false ? segment.text : cleanForSpeech(segment.text);
+		let first = true;
+		for (const chunk of splitIntoChunks(segmentText, maxChunkChars)) {
+			pieces.push({
+				text: chunk,
+				...(first && segment.pauseBeforeMs !== undefined
+					? { pauseBeforeMs: segment.pauseBeforeMs }
+					: {}),
+			});
+			first = false;
+		}
+	}
 
 	const job: SpeechJob = {
 		id: newId(),
 		fileStem: "speak",
 		text: request.text ?? "",
 		cleanedText,
+		transcript: cleanedText,
 		pieces,
+		...(directiveNote ? { directiveNote } : {}),
+		...(parsed.trailingPauseMs !== undefined
+			? { trailingPauseMs: parsed.trailingPauseMs }
+			: {}),
 		params: {
 			instruction: request.instruction,
 			voiceId: request.voiceId,
@@ -282,6 +338,81 @@ function submitSpeechJob(request: SpeechRequest): SpeechJob {
 	return job;
 }
 
+/** Compiled pieces + params, ready for the job pipeline (no re-parsing). */
+	export interface PiecesSubmission {
+	pieces: SpeechPiece[];
+	directiveNote?: string;
+	trailingPauseMs?: number;
+	fileStem?: string;
+	params: {
+		instruction?: string;
+		voiceId?: string;
+		cfgScale: number;
+		seed?: number;
+		pauseMs: number;
+	};
+	play?: boolean;
+	/** per-piece voice labels for filenames and the manifest */
+	pieceLabels?: string[];
+	/** the input transcript, saved alongside the output */
+	transcript?: string;
+	/** per-piece wav files + manifest in a dated job folder */
+	savePieces?: boolean;
+	/** light gain-only RMS matching across pieces */
+	normalizePieces?: boolean;
+}
+
+function submitPiecesJob(submission: PiecesSubmission): SpeechJob {
+	const job: SpeechJob = {
+		id: newId(),
+		fileStem: submission.fileStem ?? "script",
+		text: submission.pieces.map((p) => p.text).join(" "),
+		cleanedText: submission.pieces.map((p) => p.text).join(" "),
+		pieces: submission.pieces,
+		...(submission.directiveNote ? { directiveNote: submission.directiveNote } : {}),
+		...(submission.trailingPauseMs !== undefined
+			? { trailingPauseMs: submission.trailingPauseMs }
+			: {}),
+		params: submission.params,
+		play: submission.play ?? true,
+		...(submission.pieceLabels ? { pieceLabels: submission.pieceLabels } : {}),
+		...(submission.transcript !== undefined ? { transcript: submission.transcript } : {}),
+		...(submission.savePieces !== undefined ? { savePieces: submission.savePieces } : {}),
+		...(submission.normalizePieces !== undefined ? { normalizePieces: submission.normalizePieces } : {}),
+		background: false,
+		createdAt: Date.now(),
+		status: "queued",
+	};
+	if (speechJobs.size >= JOB_HISTORY_LIMIT) {
+		for (const [id, existing] of speechJobs) {
+			if (existing.status === "done" || existing.status === "error") {
+				speechJobs.delete(id);
+			}
+		}
+	}
+	speechJobs.set(job.id, job);
+	return job;
+}
+
+/** Submit compiled script pieces; the promise resolves at queue end (playing). */
+export function speakScriptPieces(
+	submission: PiecesSubmission,
+): Promise<SpeechJob> {
+	const job = submitPiecesJob(submission);
+	const promise = new Promise<SpeechJob>((resolve) => {
+		job.resolve = resolve;
+	});
+	void pumpSpeechQueue().catch((error) => log("pump died:", error));
+	return promise;
+}
+
+/** Fire-and-forget compiled submission (background scripts). */
+export function submitScriptPieces(submission: PiecesSubmission): SpeechJob {
+	const job = submitPiecesJob(submission);
+	void pumpSpeechQueue();
+	return job;
+}
+
 async function runJob(job: SpeechJob): Promise<void> {
 	if (job.pieces.length === 0) {
 		job.status = "error";
@@ -298,7 +429,12 @@ async function runJob(job: SpeechJob): Promise<void> {
 			cfgScale: job.params.cfgScale,
 			seed: job.params.seed,
 			pauseMs: job.params.pauseMs,
+			trailingPauseMs: job.trailingPauseMs,
 			fileStem: job.fileStem,
+			savePieces: job.savePieces,
+			normalizePieces: job.normalizePieces,
+			pieceLabels: job.pieceLabels,
+			transcript: job.transcript,
 		});
 		job.wavPath = clip.wavPath;
 		job.audioSeconds = clip.audioSeconds;
