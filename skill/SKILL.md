@@ -14,10 +14,12 @@ speech core, two entry points.
 
 ## How to speak
 
-Preferred: MCP tools, if the host registered this repo's server
-(`breeze-tts-mcp`): call `speak`.
-
-Otherwise, use the CLI from this repository root:
+How to speak depends on what is available in the conversation. If the breeze
+voice tools (`speak`, `designVoice`, `speechJobs`, …) are registered in this
+session, use those — no other setup needed. Only when the tools are absent
+but this repository is checked out locally (hosts that mounted this skill
+without registering the server) fall back to the CLI from the repository
+root:
 
 ```
 npx tsx src/cli.ts --text "Hello there." --instruction "Calm and clear."
@@ -47,23 +49,52 @@ restrained, serious tone.", "Warm and cheerful, like a friendly guide.",
 
 ## Paralinguistic tags
 
-Free-form, placed inline at their natural spot: `(sigh)`, `(laugh)`,
-`(whispering)`, `(clears throat)`, `(gasp)`, `(nervous chuckle)`, and `[叹气]` /
-`[笑]` for Mandarin. They are descriptive, not a fixed vocabulary — short tags
-usually fire; they need `cfgScale` 2-3 to reproduce reliably. Use sparingly:
-one tag at the one beat that deserves it beats three tags in a row.
+Vocal events are free-form, placed inline at their natural spot —
+descriptive phrases, not a fixed vocabulary. They need `cfgScale` 2-3 to
+reproduce reliably. Instructions remain the better control for whole-line
+delivery; tags are for localized events. Use sparingly: one tag at the one
+beat that deserves it beats three tags in a row.
 
-Delivery shifts use the same free-form grammar mid-line: `(whispering) …
-(return to normal)` re-steers the voice from the tag onward, inside the same
-generation — no extra pieces, no seam.
+Anchors **documented upstream** (model card): `(laugh)`, `(cough)`,
+`(clears throat)`, `(sigh)` — and `[笑]`, `[咳嗽]`, `[清嗓子]`, `[叹气]` for
+Mandarin. **Community-expanded canon** (SillyTavern roundup — audition on
+this engine before trusting): laughter — `(chuckle)`, `(giggle)`; pain —
+`(cry)`, `(sob)`, `(whimper)`, `(groan)`, `(moan)`; breath —
+`(breathe heavily)`; throat — `(sniffle)`; mouth — `(lip smack)`,
+`(click tongue)`; reflexes — `(yawn)`, `(sneeze)`, `(hiccup)`, `(burp)`,
+`(gulp)`, `(gag)`; reactions — `(grunt)`, `(scoff)`, `(snort)`. Weigh that
+list against our own tests: `(gasp)` performed well here; `(inhale)` and
+`(exhale)` did **not**, despite being on it. **Tested beyond all
+documentation** (this engine, this stack): delivery shifts — `(whispering)`,
+`(angry)`, `(return to normal)` — re-steer mid-line.
 
-Tested on this engine: reliable — `(sigh)`, `(gasp)`, `(laugh)`, `(cough)`,
-`(clears throat)`; delivery shifts — `(whispering)`, `(angry)`,
-`(return to normal)`. Plausible but NOT performed despite the name —
-`(inhale)`, `(exhale)`. Breath padding: a vocal event at either end of a
-`{pause}` often reads more naturally than bare silence — `(sigh)` lands
-heavy, `(gasp)` lands tense. Guidance, not a rule; audition a new tag once
-before counting on it.
+The grammar is open-ended: these tiers are a guide, not a whitelist. Compose
+any short lowercase parenthetical tag, and audition it once when the moment
+matters.
+
+Delivery shifts use the same grammar mid-line: `(whispering) … (return to
+normal)` re-steers the voice from the tag onward, inside the same generation
+— no extra pieces, no seam.
+
+Breath padding: a vocal event at either end of a `{pause}` often reads more
+naturally than bare silence — `(sigh)` lands heavy, `(gasp)` lands tense.
+Guidance, not a rule.
+
+## Pauses
+
+Default to none — the engine's phrasing and the beat between pieces read
+naturally most of the time. `{pause:N}` is for silence that carries meaning
+the words don't: a dramatic beat, or a deliberate break at a paragraph or
+sentence boundary.
+
+Mid-sentence pauses are a hard cut between two takes, with no prosodic glue
+across them — reach for that only at the rare moment you would actually stop
+dead.
+
+Seconds, 0–15: `{pause:0.8}` is a beat, `{pause:2}` is a paragraph-weight
+silence, `{pause:4}` and up is cinematic time. If the silence feels flat
+rather than dramatic, pad it with a performed breath — see the tested tags
+above.
 
 ## Queuing and overlap
 
