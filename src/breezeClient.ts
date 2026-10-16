@@ -96,8 +96,9 @@ export interface SpeechPiece {
 	/** directive silence BEFORE this piece; replaces the standard beat on its boundary */
 	pauseBeforeMs?: number;
 	design?: boolean;
-	/** phase 2: parsed but not wired yet (directives.ts strips them today) */
+	/** per-piece delivery; undefined inherits the call-level instruction */
 	instruction?: string;
+	/** per-piece voice; undefined inherits the call-level voiceId */
 	voiceId?: string;
 }
 
@@ -129,13 +130,17 @@ export async function generateSpeech(
 		const chunk = piece.text;
 		const form = new URLSearchParams();
 		form.set("text", chunk);
+		// per-piece delivery and voice win over the call-level defaults; a
+		// different instruction or voice per piece is its own generation pass
+		const pieceInstruction = piece.instruction ?? options.instruction;
+		const pieceVoiceId = piece.voiceId ?? options.voiceId ?? BREEZE_TTS_VOICE;
 		// design mode is the server's "no voice_id, no reference" case: voice_id
 		// must be omitted or the generated clip is a direction-clone of whatever
 		// voice the id points at instead of an invented voice
-		if (!options.design) form.set("voice_id", options.voiceId ?? BREEZE_TTS_VOICE);
+		if (!options.design) form.set("voice_id", pieceVoiceId);
+		if (pieceInstruction) form.set("instruction", pieceInstruction);
 		form.set("cfg_scale", String(options.cfgScale));
 		form.set("split_chars", "0"); // chunking is ours; one pass per piece
-		if (options.instruction) form.set("instruction", options.instruction);
 		if (options.seed !== undefined) form.set("seed", String(options.seed));
 
 		const res = await postWithRetry(
